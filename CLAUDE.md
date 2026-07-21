@@ -20,19 +20,25 @@ Static, zero-dependency retirement-readiness calculator (vanilla JS, no build st
 index.html            app entry point
 engine/               pure calculation modules (unit-tested)
   resolver.js           the override resolver — DONE (implemented + tested)
-  project.js            accumulation projection — DONE (growth+contributions); decumulation next
+  project.js            accumulation + decumulation — DONE, pre-tax (spending, withdrawal
+                         strategy, tax-status sequencing, portfolio survival); taxes/RMDs next
   tax.js                brackets / std ded / LTCG / SS tax / RMDs — stub
   socialsecurity.js     earnings → AIME → PIA → claiming   — stub
-  strategies.js         withdrawal amount + sequencing     — stub
+  strategies.js         withdrawal amount + sequencing     — superseded by project.js's
+                         built-in sequencing for Phase 3; revisit for Phase 6 (bracket-fill,
+                         Roth conversions) which need the tax engine
 ui/                   vanilla-JS UI (no framework, no deps)
-  app.js                app shell: accounts + assumptions + projection; localStorage persistence
+  app.js                app shell: accounts + working-years + retirement-spending assumptions
+                         + full-lifecycle projection; localStorage persistence
   accounts-editor.js    enter/edit accounts, tax statuses, balances, cost basis
-  setting-control.js    the reusable Simple/Expand knob, with a live resolved preview
-  projection-view.js    summary tiles + the two-series chart (today's $ vs nominal) + table
+  setting-control.js    the reusable Simple/Expand knob (supports `perAccount:false` for
+                         household-level settings like spending), with a live resolved preview
+  projection-view.js    stat tiles (incl. portfolio survival) + the two-series chart (today's $
+                         vs nominal, with a retirement marker) + table, spanning both phases
   dom.js, formats.js    tiny DOM builder (incl. SVG) + value<->input formatting helpers
 data/                 tax-tables.json + EXAMPLE profile/snapshot/scenario templates
 schemas/              JSON Schemas for profile / snapshot / scenario
-test/                 node:test suites (smoke + resolver)
+test/                 node:test suites (smoke, resolver, accumulation, decumulation)
 ```
 
 ## Running
@@ -43,9 +49,14 @@ test/                 node:test suites (smoke + resolver)
 
 ## Status
 
-Done & tested: the override resolver, the accounts + Simple/Expand UI, and the accumulation
-projection (growth + contributions → retirement, charted in today's dollars, with a hover
-crosshair and table view). In progress: decumulation, taxes, Social Security, withdrawal strategies.
+Done & tested: the override resolver, the accounts + Simple/Expand UI, and the full
+accumulation→decumulation projection (growth + contributions to retirement; then spending, a
+withdrawal strategy, tax-status-aware sequencing, and portfolio survival to a horizon year) —
+charted in today's dollars with a retirement marker, hover crosshair, and table view. Pre-tax:
+no tax is computed and no RMDs are forced yet. In progress: taxes, RMDs, Social Security, and
+tax-bracket-aware withdrawal sequencing.
+
+Known gaps: light theme only (no dark mode); no income modeling yet.
 
 > `data/tax-tables.json` figures are UNVERIFIED placeholders — reconcile against current IRS
 > tables (and current law) before the tax engine relies on them.

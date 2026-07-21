@@ -1,21 +1,25 @@
-// projection-view.js — renders a projectAccumulation() result (design doc §4.1/§7):
-// summary stat tiles, a two-series line chart (today's-dollars vs nominal), and a table view.
+// projection-view.js — renders a project() result (design doc §4): summary stat tiles
+// (including portfolio survival), a two-series line chart spanning accumulation AND
+// decumulation with a retirement marker, and a table view.
 //
 // Chart design follows the dataviz method: change-over-time → line chart; two series → legend
 // present + direct end-labels; blue = today's-dollars (the headline), orange = nominal. Palette
-// validated (CVD ΔE 24.7 light / 26.8 dark). Light-mode tokens to match the app; a hover
-// crosshair+tooltip and a table view provide the interaction/accessibility layers.
+// validated (CVD ΔE 24.7 light / 26.8 dark). Status colors (good/critical) are the skill's fixed,
+// pre-validated tokens, shown with an icon + label (never color alone). A hover crosshair+tooltip
+// and a table view provide the interaction/accessibility layers.
 
 import { h, s, clear } from './dom.js';
 
 const COL = {
-  real: '#2a78d6',     // categorical slot 1 — today's dollars (headline)
-  nominal: '#eb6834',  // categorical slot 2 — nominal
+  real: '#2a78d6',      // categorical slot 1 — today's dollars (headline)
+  nominal: '#eb6834',   // categorical slot 2 — nominal
   ink: '#0b0b0b',
   ink2: '#52514e',
   muted: '#898781',
   grid: '#e1e0d9',
   base: '#c3c2b7',
+  good: '#0ca30c',      // fixed status palette — never themed
+  critical: '#d03b3b',
 };
 
 const usd = (v) => {
@@ -54,10 +58,31 @@ function statTile(label, value, sub, accent) {
   );
 }
 
+function survivalTile(result) {
+  const depleted = result.firstDepletionYear != null;
+  const label = 'Portfolio';
+  if (result.horizonYear <= result.retirementYear) {
+    return statTile(label, '— not yet in retirement —', 'Set a horizon year past retirement', COL.muted);
+  }
+  if (depleted) {
+    return h('div', { class: 'stat' },
+      h('div', { class: 'stat-label' }, label),
+      h('div', { class: 'stat-value', style: { color: COL.critical } }, '⚠ Runs out'),
+      h('div', { class: 'stat-sub' }, `in ${result.firstDepletionYear}, before the ${result.horizonYear} horizon`),
+    );
+  }
+  return h('div', { class: 'stat' },
+    h('div', { class: 'stat-label' }, label),
+    h('div', { class: 'stat-value', style: { color: COL.good } }, '✓ Lasts'),
+    h('div', { class: 'stat-sub' }, `through ${result.horizonYear}`),
+  );
+}
+
 function buildChart(result) {
   const rows = result.years;
-  const baseYear = result.baseYear;
-  const endYear = result.endYear;
+  const baseYear = rows[0].year;
+  const endYear = rows[rows.length - 1].year;
+  const retYear = result.retirementYear;
   const W = 760, H = 360, m = { t: 20, r: 132, b: 40, l: 66 };
   const plotW = W - m.l - m.r, plotH = H - m.t - m.b;
 
@@ -70,7 +95,6 @@ function buildChart(result) {
   const nominalPts = pts((r) => r.totals.endBalance);
   const realPts = pts((r) => r.real.endBalance);
 
-  // y gridlines + labels (5 ticks: 0..ymax)
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * ymax);
   const grid = yTicks.map((v) =>
     s('line', { x1: m.l, y1: yScale(v), x2: m.l + plotW, y2: yScale(v), stroke: v === 0 ? COL.base : COL.grid, 'stroke-width': 1 }));
@@ -79,32 +103,36 @@ function buildChart(result) {
   const xLabels = xTickYears(baseYear, endYear).map((yr) =>
     s('text', { x: xScale(yr), y: m.t + plotH + 20, 'text-anchor': 'middle', fill: COL.muted, 'font-size': 11, 'font-variant-numeric': 'tabular-nums' }, yr));
 
-  // direct end-labels, nudged apart if they collide
+  // retirement marker: a neutral (non-data-color) annotation, not a third series
+  const retMarker = (retYear > baseYear && retYear < endYear)
+    ? s('g', {},
+        s('line', { x1: xScale(retYear), y1: m.t, x2: xScale(retYear), y2: m.t + plotH, stroke: COL.base, 'stroke-width': 1, 'stroke-dasharray': '2 3' }),
+        s('text', { x: xScale(retYear), y: m.t - 6, 'text-anchor': 'middle', fill: COL.muted, 'font-size': 10 }, 'Retirement'))
+    : null;
+
   const endRow = rows[rows.length - 1];
   let yNom = yScale(endRow.totals.endBalance);
   let yReal = yScale(endRow.real.endBalance);
-  if (yReal - yNom < 14) yReal = yNom + 14;
+  if (Math.abs(yReal - yNom) < 14) yReal = yNom + (yReal >= yNom ? 14 : -14);
   const endLabel = (yy, color, tag, val) =>
     s('g', {},
       s('circle', { cx: xScale(endYear), cy: yScale(val), r: 3.5, fill: color }),
       s('text', { x: xScale(endYear) + 10, y: yy + 4, fill: COL.ink2, 'font-size': 12 },
         s('tspan', { fill: color, 'font-weight': 700 }, '● '), `${tag} ${usd(val)}`));
 
-  // hover layer
   const cross = s('line', { x1: 0, y1: m.t, x2: 0, y2: m.t + plotH, stroke: COL.base, 'stroke-width': 1, 'stroke-dasharray': '3 3', visibility: 'hidden' });
   const dotN = s('circle', { r: 4, fill: COL.nominal, stroke: '#fff', 'stroke-width': 1.5, visibility: 'hidden' });
   const dotR = s('circle', { r: 4, fill: COL.real, stroke: '#fff', 'stroke-width': 1.5, visibility: 'hidden' });
 
   const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart-svg', role: 'img', 'aria-label': `Projected balance from ${baseYear} to ${endYear}` },
     s('title', {}, `Projected balance ${baseYear}–${endYear}: today's dollars and nominal`),
-    ...grid, ...yLabels, ...xLabels,
+    ...grid, ...yLabels, ...xLabels, retMarker,
     s('polyline', { points: nominalPts, fill: 'none', stroke: COL.nominal, 'stroke-width': 2, 'stroke-linejoin': 'round' }),
     s('polyline', { points: realPts, fill: 'none', stroke: COL.real, 'stroke-width': 2, 'stroke-linejoin': 'round' }),
     endLabel(yNom, COL.nominal, 'Nominal', endRow.totals.endBalance),
     endLabel(yReal, COL.real, "Today's", endRow.real.endBalance),
     cross, dotN, dotR);
 
-  // tooltip + mouse handling
   const tip = h('div', { class: 'chart-tip', style: { visibility: 'hidden' } });
   const wrap = h('div', { class: 'chart-wrap' }, svg, tip);
   const overlay = s('rect', { x: m.l, y: m.t, width: plotW, height: plotH, fill: 'transparent', style: 'cursor:crosshair' });
@@ -120,19 +148,25 @@ function buildChart(result) {
   overlay.addEventListener('mousemove', (e) => {
     const r = nearestRow(e.clientX);
     const x = xScale(r.year);
-    for (const el of [cross]) { el.setAttribute('x1', x); el.setAttribute('x2', x); el.setAttribute('visibility', 'visible'); }
+    cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
     dotN.setAttribute('cx', x); dotN.setAttribute('cy', yScale(r.totals.endBalance)); dotN.setAttribute('visibility', 'visible');
     dotR.setAttribute('cx', x); dotR.setAttribute('cy', yScale(r.real.endBalance)); dotR.setAttribute('visibility', 'visible');
     clear(tip);
-    tip.append(
-      h('div', { class: 'tip-year' }, `${r.year}${r.t ? ` · +${r.t} yr` : ''}`),
+    const lines = [
+      h('div', { class: 'tip-year' }, `${r.year} · ${r.phase === 'decumulation' ? 'retired' : 'working'}`),
       h('div', {}, h('span', { class: 'sw', style: { background: COL.real } }), `Today's: ${usdFull(r.real.endBalance)}`),
       h('div', {}, h('span', { class: 'sw', style: { background: COL.nominal } }), `Nominal: ${usdFull(r.totals.endBalance)}`),
-    );
+    ];
+    if (r.phase === 'accumulation' && r.totals.contribution) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.contribution)} contributed`));
+    if (r.phase === 'decumulation') {
+      lines.push(h('div', { class: 'tip-sub' }, `− ${usdFull(r.totals.withdrawal)} withdrawn`));
+      if (r.totals.shortfall > 1e-6) lines.push(h('div', { class: 'tip-sub', style: { color: COL.critical } }, `Shortfall: ${usdFull(r.totals.shortfall)}`));
+    }
+    tip.append(...lines);
     const rect = wrap.getBoundingClientRect();
-    const relX = ((x) / W) * rect.width;
+    const relX = (x / W) * rect.width;
     tip.style.left = `${Math.min(relX + 14, rect.width - 150)}px`;
-    tip.style.top = `12px`;
+    tip.style.top = '12px';
     tip.style.visibility = 'visible';
   });
   overlay.addEventListener('mouseleave', () => {
@@ -140,7 +174,6 @@ function buildChart(result) {
     for (const el of [cross, dotN, dotR]) el.setAttribute('visibility', 'hidden');
   });
 
-  // legend (identity not carried by color alone)
   const legend = h('div', { class: 'legend' },
     h('span', { class: 'leg' }, h('span', { class: 'sw', style: { background: COL.real } }), "Today's dollars"),
     h('span', { class: 'leg' }, h('span', { class: 'sw', style: { background: COL.nominal } }), 'Nominal'),
@@ -152,11 +185,14 @@ function buildTable(result) {
   const rows = result.years;
   const table = h('table', { class: 'proj-table' },
     h('thead', {}, h('tr', {},
-      h('th', {}, 'Year'), h('th', { class: 'r' }, '+Yr'), h('th', { class: 'r' }, 'Contribution'),
-      h('th', { class: 'r' }, 'Growth'), h('th', { class: 'r' }, 'Balance (nominal)'), h('th', { class: 'r' }, "Balance (today's)"))),
+      h('th', {}, 'Year'), h('th', {}, 'Phase'), h('th', { class: 'r' }, 'Contribution'),
+      h('th', { class: 'r' }, 'Withdrawal'), h('th', { class: 'r' }, 'Growth'),
+      h('th', { class: 'r' }, 'Balance (nominal)'), h('th', { class: 'r' }, "Balance (today's)"))),
     h('tbody', {}, ...rows.map((r) => h('tr', {},
-      h('td', {}, r.year), h('td', { class: 'r' }, r.t),
-      h('td', { class: 'r' }, usdFull(r.totals.contribution)),
+      h('td', {}, r.year),
+      h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
+      h('td', { class: 'r' }, r.totals.contribution ? usdFull(r.totals.contribution) : '—'),
+      h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(r.totals.withdrawal) : '—'),
       h('td', { class: 'r' }, usdFull(r.totals.growth)),
       h('td', { class: 'r' }, usdFull(r.totals.endBalance)),
       h('td', { class: 'r' }, usdFull(r.real.endBalance)),
@@ -175,17 +211,18 @@ export function createProjectionView() {
     if (!current) { el.append(h('p', { class: 'muted' }, 'Add at least one account to see a projection.')); return; }
     const r = current;
     const startTotal = r.years[0].totals.endBalance;
+    const retRow = r.years.find((y) => y.year === r.retirementYear) || r.years[0];
     const endRow = r.years[r.years.length - 1];
-    const contributed = r.years.reduce((sn, y) => sn + y.totals.contribution, 0);
-    const growth = endRow.totals.endBalance - startTotal - contributed;
-    const yrs = r.endYear - r.baseYear;
+    const contributed = r.years.reduce((sn, y) => sn + (y.totals.contribution || 0), 0);
+    const growth = retRow.totals.endBalance - startTotal - contributed;
+    const yrs = r.retirementYear - r.baseYear;
 
     const parts = [
       h('div', { class: 'stats' },
-        statTile("At retirement · today's dollars", usd(endRow.real.endBalance), `${r.endYear} · in ${yrs} yr${yrs === 1 ? '' : 's'}`, COL.real),
-        statTile('At retirement · nominal', usd(endRow.totals.endBalance), `${r.endYear}`, COL.nominal),
-        statTile('Total contributed', usd(contributed), 'over the period'),
-        statTile('Investment growth', usd(growth), 'nominal, cumulative'),
+        survivalTile(r),
+        statTile("At retirement · today's dollars", usd(retRow.real.endBalance), `${r.retirementYear} · in ${yrs} yr${yrs === 1 ? '' : 's'}`, COL.real),
+        statTile('Total contributed', usd(contributed), 'over the accumulation years'),
+        statTile("End of plan · today's dollars", usd(endRow.real.endBalance), `${r.horizonYear}`, endRow.real.endBalance > 0 ? COL.real : COL.critical),
       ),
       buildChart(r),
       h('div', { class: 'table-toggle' },

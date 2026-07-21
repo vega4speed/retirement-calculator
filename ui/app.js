@@ -1,6 +1,8 @@
-// app.js — app shell. Enter accounts into a snapshot, set the accumulation assumptions
-// (return, contributions, inflation, wage growth) via the Simple/Expand controls, pick a
-// retirement year, and see the year-by-year projection (chart + table) in today's dollars.
+// app.js — app shell. Enter accounts into a snapshot, set accumulation assumptions (return,
+// contributions, inflation, wage growth) and decumulation assumptions (spending or a withdrawal
+// %, other income, sequencing) via the Simple/Expand controls, pick retirement/horizon years,
+// and see the full year-by-year projection (chart + table) in today's dollars, including
+// whether the portfolio lasts.
 //
 // Persistence is client-only so this can be HOSTED (e.g. GitHub Pages) with no personal data
 // leaving the browser: state auto-saves to localStorage; Export/Import is for backups. Nothing
@@ -10,7 +12,7 @@ import { h, clear, download } from './dom.js';
 import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
-import { projectAccumulation } from '../engine/project.js';
+import { project } from '../engine/project.js';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const STORAGE_KEY = 'retirement-calc:v1';
@@ -28,6 +30,9 @@ const defaultAssumptions = () => ({
   contributions: { default: 0 },
   inflation: { default: 0.03 },
   wageGrowth: { default: 0.03 },
+  spending: { default: 40000 },
+  otherIncome: { default: 0 },
+  withdrawalPercent: { default: 0.04 },
 });
 
 export function mount(root) {
@@ -41,7 +46,12 @@ export function mount(root) {
   };
   let assumptions = defaultAssumptions();
   const baseYear = () => parseInt(String(snapshot.asOf).slice(0, 4), 10) || new Date().getFullYear();
-  const retirement = { year: baseYear() + 25 };
+  const plan = {
+    retirementYear: baseYear() + 25,
+    horizonYear: baseYear() + 55,
+    strategy: 'fixedReal',       // 'fixedReal' | 'fixedPercent'
+    sequencing: 'conventional',  // 'conventional' | 'proportional'
+  };
 
   const acctSummary = () => snapshot.accounts.map((a) => ({ id: a.id, label: a.label || a.id }));
   const projectionView = createProjectionView();
@@ -49,7 +59,7 @@ export function mount(root) {
 
   // --- persistence (localStorage only) -------------------------------------
   function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ snapshot, assumptions, retirement })); } catch { /* disabled */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ snapshot, assumptions, plan })); } catch { /* disabled */ }
   }
   function loadPersisted() {
     try {
@@ -58,14 +68,18 @@ export function mount(root) {
       const data = JSON.parse(raw);
       if (data.snapshot) applySnapshot(data.snapshot);
       if (data.assumptions && typeof data.assumptions === 'object') assumptions = { ...defaultAssumptions(), ...data.assumptions };
-      if (data.retirement && Number.isFinite(data.retirement.year)) retirement.year = data.retirement.year;
+      if (data.plan && typeof data.plan === 'object') Object.assign(plan, data.plan);
+      else if (data.retirement && Number.isFinite(data.retirement.year)) plan.retirementYear = data.retirement.year; // migrate v1 shape
     } catch { /* ignore corrupt state */ }
   }
   function clearSaved() {
     try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     snapshot.accounts.length = 0;
     assumptions = defaultAssumptions();
-    retirement.year = baseYear() + 25;
+    plan.retirementYear = baseYear() + 25;
+    plan.horizonYear = baseYear() + 55;
+    plan.strategy = 'fixedReal';
+    plan.sequencing = 'conventional';
     rebuild();
   }
 
@@ -84,16 +98,22 @@ export function mount(root) {
 
   // --- projection ----------------------------------------------------------
   function computeProjection() {
-    const accounts = snapshot.accounts.map((a) => ({ id: a.id, balance: Number(a.balance) || 0 }));
+    const accounts = snapshot.accounts.map((a) => ({ id: a.id, balance: Number(a.balance) || 0, taxStatus: a.taxStatus }));
     if (!accounts.length) return null;
     const startYear = baseYear();
-    const endYear = Math.max(startYear, Math.round(retirement.year) || startYear);
-    return projectAccumulation({
-      startYear, endYear, accounts,
+    const retirementYear = Math.max(startYear, Math.round(plan.retirementYear) || startYear);
+    const horizonYear = Math.max(retirementYear, Math.round(plan.horizonYear) || retirementYear);
+    return project({
+      baseYear: startYear, retirementYear, horizonYear, accounts,
       returnRate: assumptions.returnRate,
       contributions: assumptions.contributions,
       wageGrowth: assumptions.wageGrowth,
       inflation: assumptions.inflation,
+      spending: assumptions.spending,
+      otherIncome: assumptions.otherIncome,
+      withdrawalPercent: assumptions.withdrawalPercent,
+      strategy: plan.strategy,
+      sequencing: plan.sequencing,
     });
   }
   function refreshProjection() {
@@ -140,6 +160,7 @@ export function mount(root) {
       setting: assumptions[key],
       label,
       kind,
+      perAccount,
       accounts: perAccount ? acctSummary() : [],
       baseYear: baseYear() + 1,
       onChange: onEdit,
@@ -148,25 +169,27 @@ export function mount(root) {
     return control.el;
   }
 
-  function retirementRow() {
+  function yearRow(label, get, set, min) {
     const hint = h('span', { class: 'muted small' });
-    const setHint = () => { hint.textContent = `in ${Math.max(0, Math.round(retirement.year) - baseYear())} yr(s)`; };
+    const setHint = () => { hint.textContent = `in ${Math.max(0, get() - baseYear())} yr(s)`; };
     setHint();
     const input = h('input', {
-      type: 'number', step: '1', value: retirement.year, class: 'num yr',
+      type: 'number', step: '1', value: get(), class: 'num yr',
       onchange: (e) => {
         const v = parseInt(e.target.value, 10);
-        retirement.year = Number.isFinite(v) ? Math.max(baseYear(), v) : baseYear();
-        e.target.value = retirement.year;
+        set(Number.isFinite(v) ? Math.max(min(), v) : min());
+        e.target.value = get();
         setHint(); onEdit();
       },
     });
-    return h('div', { class: 'setting' },
-      h('div', { class: 'setting-head' },
-        h('label', { class: 'setting-label' }, 'Retirement year'),
-        h('span', { class: 'field' }, input),
-        hint,
-      ));
+    return h('div', { class: 'setting' }, h('div', { class: 'setting-head' }, h('label', { class: 'setting-label' }, label), h('span', { class: 'field' }, input), hint));
+  }
+
+  function selectRow(label, value, options, onSet) {
+    const select = h('select', {
+      onchange: (e) => { onSet(e.target.value); onEdit(); rebuild(); },
+    }, ...options.map(([v, lbl]) => h('option', { value: v, selected: v === value }, lbl)));
+    return h('div', { class: 'setting' }, h('div', { class: 'setting-head' }, h('label', { class: 'setting-label' }, label), select));
   }
 
   // --- view ----------------------------------------------------------------
@@ -192,15 +215,31 @@ export function mount(root) {
           h('button', { class: 'ghost', onclick: () => { if (confirm('Clear all saved data in this browser?')) clearSaved(); } }, 'Clear'),
         ),
       ),
-      section('2 · Assumptions',
+      section('2 · Working years',
         h('p', { class: 'muted' }, 'Set one value, or Expand any knob to override it per account and/or per year. Contributions are the base-year annual amount, escalated by wage growth.'),
-        retirementRow(),
+        yearRow('Retirement year', () => plan.retirementYear, (v) => { plan.retirementYear = v; if (plan.horizonYear < v) plan.horizonYear = v; }, baseYear),
         settingRow('returnRate', 'Rate of return', 'percent', true),
         settingRow('contributions', 'Annual contribution', 'money', true),
         settingRow('inflation', 'Inflation', 'percent', false),
         settingRow('wageGrowth', 'Wage growth', 'percent', false),
       ),
-      section("3 · Projection to retirement (today's dollars)",
+      section('3 · Retirement spending',
+        h('p', { class: 'muted' }, "Pre-tax for now (Phase 4 adds real tax math): withdrawals are gross dollar pulls, drawn from your accounts in the order below. \"Does it last\" reflects spending vs. growth only."),
+        yearRow('Plan through year', () => plan.horizonYear, (v) => { plan.horizonYear = v; }, () => plan.retirementYear),
+        selectRow('Withdrawal strategy', plan.strategy, [
+          ['fixedReal', "Fixed spending target (today's $)"],
+          ['fixedPercent', '% of current balance each year'],
+        ], (v) => { plan.strategy = v; }),
+        plan.strategy === 'fixedPercent'
+          ? settingRow('withdrawalPercent', 'Withdrawal %', 'percent', false)
+          : settingRow('spending', 'Annual spending (today’s $)', 'money', false),
+        settingRow('otherIncome', "Other income — pension/rental (today's $)", 'money', false),
+        selectRow('Withdrawal order', plan.sequencing, [
+          ['conventional', 'Conventional (cash → taxable → tax-deferred → HSA → Roth)'],
+          ['proportional', 'Proportional (spread across all accounts)'],
+        ], (v) => { plan.sequencing = v; }),
+      ),
+      section("4 · Projection (today's dollars)",
         projectionView.el,
       ),
     );
@@ -214,7 +253,7 @@ export function mount(root) {
   root.append(
     h('header', { class: 'app-header' },
       h('h1', {}, 'Retirement Calculator'),
-      h('p', { class: 'muted' }, 'Project your accounts forward to retirement, in today’s dollars. Saved only in this browser.')),
+      h('p', { class: 'muted' }, 'Project your accounts through retirement, in today’s dollars. Saved only in this browser.')),
     body,
   );
   rebuild();

@@ -35,7 +35,7 @@ value in Simple mode, or Expand to override it per account, per year, or per acc
 index.html          the app entry point
 engine/             pure calculation modules (no DOM, no I/O) — unit-tested
   resolver.js         the override resolver (done + tested)
-  project.js          accumulation projection (done + tested); decumulation in progress
+  project.js          accumulation + decumulation projection (done + tested); pre-tax
   tax.js              brackets / std ded / LTCG / SS taxation / RMDs (in progress)
   socialsecurity.js   earnings → AIME → PIA → claiming            (in progress)
   strategies.js       withdrawal amount + tax-aware sequencing    (in progress)
@@ -48,9 +48,15 @@ test/               node:test suites
 ## Status
 
 Early build. Done & tested: the override resolver, the accounts + Simple/Expand UI, and the
-**accumulation projection** — year-by-year growth + contributions to retirement, charted in
-today's dollars (with a hover crosshair and a table view). In progress: decumulation, taxes,
-Social Security, and withdrawal strategies.
+full **accumulation + decumulation projection** — growth and contributions to retirement, then
+spending, a withdrawal strategy (fixed target or % of balance), tax-status-aware account
+sequencing, and portfolio-survival tracking through a horizon year — all charted in today's
+dollars with a retirement marker, hover crosshair, and a table view. This is **pre-tax**:
+withdrawals are gross dollar pulls, no tax is computed, and RMDs aren't forced yet. In progress:
+taxes, Social Security, and tax-aware withdrawal sequencing.
+
+Known gaps: light theme only (no dark mode yet); no income modeling yet (blocks a %-of-income
+contribution mode and feeds into the tax/SS engines later).
 
 > **Note:** `data/tax-tables.json` figures are unverified placeholders and must be reconciled
 > against current IRS tables before the tax engine relies on them.
