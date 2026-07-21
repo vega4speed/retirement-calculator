@@ -77,7 +77,10 @@ function scaleBrackets(brackets, factor) {
   return brackets.map((b) => ({ upTo: b.upTo == null ? null : b.upTo * factor, rate: b.rate }));
 }
 
-function cumulativeFactor(setting, fromYear, toYear) {
+/** Compounds `setting` (resolved per {year}) from fromYear to toYear — the shared indexing
+ * primitive: resolveYearTable uses it for brackets/standard deduction, socialsecurity.js reuses
+ * it for the PIA bend points. Symmetric: toYear before fromYear divides instead of multiplies. */
+export function cumulativeFactor(setting, fromYear, toYear) {
   if (toYear === fromYear) return 1;
   let factor = 1;
   if (toYear > fromYear) {

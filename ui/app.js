@@ -14,6 +14,7 @@ import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
 import { project } from '../engine/project.js';
 import { resolveYearTable, bracketBreakdown } from '../engine/tax.js';
+import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from '../engine/socialsecurity.js';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const STORAGE_KEY = 'retirement-calc:v1';
@@ -39,11 +40,20 @@ const defaultAssumptions = () => ({
   otherIncome: { default: 0 },
   withdrawalPercent: { default: 0.04 },
   stateTaxRate: { default: 0 }, // default TN: no state income tax
+  earnings: { default: 70000 }, // wage-indexed-equivalent annual $ — see socialsecurity.js
+  colaRate: { default: 0.025 }, // historical Social Security COLA average, roughly
 });
 
 const defaultFiling = () => ({
   filingStatus: 'single',
   birthYear: new Date().getFullYear() - 45,
+});
+
+const defaultSocial = (birthYear) => ({
+  careerStartYear: birthYear + 22, // typical career-entry-age guess; override for accuracy
+  claimingAge: 67,
+  solvencyHaircutStartYear: 2033, // OASI trust fund's projected depletion year (2025 Trustees Report)
+  solvencyHaircutFactor: 1,       // 1 = assume Congress fixes it; ~0.77 = the projected payable share if not
 });
 
 export async function mount(root) {
@@ -62,6 +72,7 @@ export async function mount(root) {
   };
   let assumptions = defaultAssumptions();
   let filing = defaultFiling();
+  let social = defaultSocial(filing.birthYear);
   const baseYear = () => parseInt(String(snapshot.asOf).slice(0, 4), 10) || new Date().getFullYear();
   const plan = {
     retirementYear: baseYear() + 25,
@@ -87,12 +98,29 @@ export async function mount(root) {
     return { ordinary, ltcg };
   }
 
+  // Live "here's what that produces" readout for the Social Security section — recomputed from
+  // the same engine functions the projection itself uses, so it never drifts from the real result.
+  function socialSecurityEstimate() {
+    if (!taxTables || !Number.isFinite(filing.birthYear) || !Number.isInteger(social.careerStartYear)) return null;
+    const retirementYear = Math.max(baseYear(), Math.round(plan.retirementYear) || baseYear());
+    try {
+      const pia = estimatePIA({
+        earnings: assumptions.earnings, careerStartYear: social.careerStartYear, retirementYear,
+        birthYear: filing.birthYear, tables: taxTables, anchorYear: TAX_ANCHOR_YEAR, wageIndexingRate: assumptions.wageGrowth,
+      });
+      const fra = fullRetirementAge(filing.birthYear);
+      const annualBenefit = benefitAtClaimingAge(pia, social.claimingAge, fra, taxTables.socialSecurity);
+      const claimingYear = Math.round(filing.birthYear + social.claimingAge);
+      return { pia, fra, annualBenefit, claimingYear };
+    } catch { return null; }
+  }
+
   const projectionView = createProjectionView({ bracketBreakdownFor });
   let acctAwareControls = [];
 
   // --- persistence (localStorage only) -------------------------------------
   function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ snapshot, assumptions, plan, filing })); } catch { /* disabled */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ snapshot, assumptions, plan, filing, social })); } catch { /* disabled */ }
   }
   function loadPersisted() {
     try {
@@ -104,6 +132,7 @@ export async function mount(root) {
       if (data.plan && typeof data.plan === 'object') Object.assign(plan, data.plan);
       else if (data.retirement && Number.isFinite(data.retirement.year)) plan.retirementYear = data.retirement.year; // migrate v1 shape
       if (data.filing && typeof data.filing === 'object') filing = { ...defaultFiling(), ...data.filing };
+      if (data.social && typeof data.social === 'object') social = { ...defaultSocial(filing.birthYear), ...data.social };
     } catch { /* ignore corrupt state */ }
   }
   function clearSaved() {
@@ -111,6 +140,7 @@ export async function mount(root) {
     snapshot.accounts.length = 0;
     assumptions = defaultAssumptions();
     filing = defaultFiling();
+    social = defaultSocial(filing.birthYear);
     plan.retirementYear = baseYear() + 25;
     plan.horizonYear = baseYear() + 55;
     plan.strategy = 'fixedReal';
@@ -163,6 +193,10 @@ export async function mount(root) {
         taxTables, anchorYear: TAX_ANCHOR_YEAR,
         bracketIndexingRate: assumptions.inflation, standardDeductionIndexingRate: assumptions.inflation,
         stateTaxRate: assumptions.stateTaxRate,
+        // Social Security (Phase 5) is opt-in within tax mode: needs earnings + claiming age.
+        earnings: assumptions.earnings, careerStartYear: social.careerStartYear, claimingAge: social.claimingAge,
+        colaRate: assumptions.colaRate,
+        solvencyHaircutStartYear: social.solvencyHaircutStartYear, solvencyHaircutFactor: social.solvencyHaircutFactor,
       } : {}),
     });
   }
@@ -256,6 +290,44 @@ export async function mount(root) {
       h('label', { class: 'setting-label' }, 'Birth year'), h('span', { class: 'field' }, input), hint));
   }
 
+  function formatYearsMonths(years) {
+    const wholeYears = Math.floor(years);
+    const months = Math.round((years - wholeYears) * 12);
+    return months === 0 ? `${wholeYears}` : `${wholeYears}y ${months}mo`;
+  }
+
+  function socialNumberRow(label, get, set, hintFn) {
+    const hint = h('span', { class: 'muted small' });
+    const setHint = () => { hint.textContent = hintFn ? hintFn() : ''; };
+    setHint();
+    const input = h('input', {
+      type: 'number', step: '1', value: get(), class: 'num yr',
+      onchange: (e) => {
+        const v = parseInt(e.target.value, 10);
+        set(Number.isFinite(v) ? v : get());
+        e.target.value = get();
+        persist(); rebuild(); // rebuild so the live benefit readout refreshes
+      },
+    });
+    return h('div', { class: 'setting' }, h('div', { class: 'setting-head' }, h('label', { class: 'setting-label' }, label), h('span', { class: 'field' }, input), hint));
+  }
+
+  function haircutFactorRow() {
+    const input = h('input', {
+      type: 'number', step: 'any', value: +(social.solvencyHaircutFactor * 100).toFixed(4), class: 'num',
+      onchange: (e) => {
+        const v = Number(e.target.value);
+        social.solvencyHaircutFactor = Number.isFinite(v) ? Math.max(0, v) / 100 : social.solvencyHaircutFactor;
+        persist(); rebuild();
+      },
+    });
+    return h('div', { class: 'setting' }, h('div', { class: 'setting-head' },
+      h('label', { class: 'setting-label' }, 'Benefits payable (if depleted)'),
+      h('span', { class: 'field' }, input, h('span', { class: 'affix' }, '%')),
+      h('span', { class: 'muted small' }, '100% = assume Congress fixes it; ~77% = the OASI trust fund\'s own projection'),
+    ));
+  }
+
   function selectRow(label, value, options, onSet) {
     const select = h('select', {
       onchange: (e) => { onSet(e.target.value); onEdit(); rebuild(); },
@@ -320,7 +392,29 @@ export async function mount(root) {
           ['proportional', 'Proportional (spread across all accounts)'],
         ], (v) => { plan.sequencing = v; }),
       ),
-      section("5 · Projection (today's dollars)",
+      section('5 · Social Security',
+        taxTables
+          ? h('p', { class: 'muted' }, "Estimated from your earnings history, not typed in as a fixed number — so \"work N more years\" or \"claim earlier\" changes the estimate. \"Earnings\" is wage-indexed-equivalent (a simplification — see the repo's README); override specific years for accuracy.")
+          : h('p', { class: 'muted', style: { color: '#b45309' } }, "Tax tables didn't load, so Social Security isn't estimated (it needs the benefit formula's bend points)."),
+        settingRow('earnings', 'Annual earnings (wage-indexed $)', 'money', false),
+        socialNumberRow('Career start year', () => social.careerStartYear, (v) => { social.careerStartYear = v; },
+          () => `${Math.max(0, plan.retirementYear - social.careerStartYear + 1)} working years counted`),
+        socialNumberRow('Claiming age', () => social.claimingAge, (v) => { social.claimingAge = Math.min(70, Math.max(62, v)); },
+          () => Number.isFinite(filing.birthYear) ? `FRA: ${formatYearsMonths(fullRetirementAge(filing.birthYear))}` : ''),
+        settingRow('colaRate', 'Cost-of-living adjustment (COLA)', 'percent', false),
+        socialNumberRow('Solvency haircut starts', () => social.solvencyHaircutStartYear, (v) => { social.solvencyHaircutStartYear = v; },
+          () => 'OASI trust fund\'s projected depletion year'),
+        haircutFactorRow(),
+        (() => {
+          const est = socialSecurityEstimate();
+          if (!est) return null;
+          return h('div', { class: 'ss-estimate' },
+            h('strong', {}, `Estimated benefit: $${Math.round(est.annualBenefit).toLocaleString()}/yr`),
+            ` starting ${est.claimingYear} (age ${social.claimingAge}) · PIA $${Math.round(est.pia).toLocaleString()}/mo at FRA ${formatYearsMonths(est.fra)}`,
+          );
+        })(),
+      ),
+      section("6 · Projection (today's dollars)",
         projectionView.el,
       ),
     );

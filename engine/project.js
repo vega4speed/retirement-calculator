@@ -21,7 +21,8 @@
 // See the design doc §4.1a for the full writeup.
 
 import { resolve } from './resolver.js';
-import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, requiredBeginningAge, rmdAmount } from './tax.js';
+import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity, requiredBeginningAge, rmdAmount, cumulativeFactor } from './tax.js';
+import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from './socialsecurity.js';
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
@@ -227,11 +228,16 @@ function pickReinvestmentTarget(accounts, fallbackId) {
  * @param {number} p.age65Count
  * @param {object} p.yearTable   resolved via tax.resolveYearTable
  * @param {number} [p.stateTaxRate] flat rate on (ordinary taxable income + capital gain); default 0
- * @returns {{withdrawals:Record<string,number>, reinvestment:Record<string,number>, totalWithdrawn:number, tax:number, ordinaryTaxableIncome:number, capitalGain:number, netAchieved:number, shortfall:number}}
+ * @param {number} [p.socialSecurityBenefit] gross SS received this year (design doc §6); its
+ *   taxable portion (tax.taxableSocialSecurity) adds to ordinary taxable income. `otherIncome`
+ *   is deliberately excluded from the provisional-income test — see project()'s docs.
+ * @param {object} [p.fixedTables] tax-tables.json's `fixed` block; required if socialSecurityBenefit > 0
+ * @returns {{withdrawals:Record<string,number>, reinvestment:Record<string,number>, totalWithdrawn:number, tax:number, ordinaryTaxableIncome:number, capitalGain:number, taxableSocialSecurity:number, netAchieved:number, shortfall:number}}
  */
 function solveTaxYear(p) {
   const { accounts, sequencing, rmdFloors, filingStatus, yearTable } = p;
   const stateTaxRate = num(p.stateTaxRate);
+  const ssBenefit = num(p.socialSecurityBenefit);
   const stdDeduction = standardDeduction({ filingStatus, age65Count: p.age65Count, yearTable });
   const totalAvailable = accounts.reduce((s, a) => s + Math.max(0, a.balance), 0);
 
@@ -243,11 +249,15 @@ function solveTaxYear(p) {
       if (a.taxStatus === 'taxDeferred') ordinaryWithdrawn += w;
       else if (a.taxStatus === 'taxable') gain += w * (1 - (a.basisFraction ?? 0));
     }
-    const ordinaryTaxableIncome = Math.max(0, ordinaryWithdrawn - stdDeduction);
+    // Provisional-income test uses ordinary withdrawals + capital gain as "other income" — both
+    // are real AGI components. otherIncome (pension/rental placeholder) is excluded, matching its
+    // exclusion from ordinary tax too (see project()'s docs for that simplification).
+    const taxableSS = ssBenefit > 0 ? taxableSocialSecurity(ssBenefit, ordinaryWithdrawn + gain, filingStatus, p.fixedTables) : 0;
+    const ordinaryTaxableIncome = Math.max(0, ordinaryWithdrawn + taxableSS - stdDeduction);
     const fedOrdinary = ordinaryTax(ordinaryTaxableIncome, filingStatus, yearTable);
     const fedCapGains = capitalGainsTax(gain, ordinaryTaxableIncome, filingStatus, yearTable);
     const stateTax = stateTaxRate * (ordinaryTaxableIncome + gain);
-    return { ordinaryTaxableIncome, gain, tax: fedOrdinary + fedCapGains + stateTax };
+    return { ordinaryTaxableIncome, gain, taxableSS, tax: fedOrdinary + fedCapGains + stateTax };
   };
 
   let grossGuess = Math.max(0, p.targetNet);
@@ -256,9 +266,9 @@ function solveTaxYear(p) {
   let exhausted = false; // true only when the LAST round hit the portfolio's total balance cap
   for (let i = 0; i < 8; i++) {
     const { withdrawals, totalWithdrawn } = sequenceWithdrawal(grossGuess, accounts, sequencing, rmdFloors);
-    const { ordinaryTaxableIncome, gain, tax } = taxFor(withdrawals);
+    const { ordinaryTaxableIncome, gain, taxableSS, tax } = taxFor(withdrawals);
     const netAchieved = totalWithdrawn - tax;
-    last = { withdrawals, totalWithdrawn, tax, ordinaryTaxableIncome, gain, netAchieved };
+    last = { withdrawals, totalWithdrawn, tax, ordinaryTaxableIncome, gain, taxableSS, netAchieved };
     exhausted = totalWithdrawn >= totalAvailable - 1e-6;
     if (exhausted) break;                                          // portfolio exhausted — a real shortfall
     if (totalWithdrawn === lastTotalWithdrawn) break;              // pinned by floors; no further movement possible (surplus, not a shortfall)
@@ -287,6 +297,7 @@ function solveTaxYear(p) {
     tax: last.tax,
     ordinaryTaxableIncome: last.ordinaryTaxableIncome,
     capitalGain: last.gain,
+    taxableSocialSecurity: last.taxableSS,
     netAchieved: last.netAchieved,
     // Only report a shortfall when the portfolio was genuinely exhausted — NOT when the loop
     // simply converged within its $0.01 tolerance (that residual is solver slack, not a real
@@ -311,8 +322,13 @@ function solveTaxYear(p) {
  * tax-free (v1 simplification: HSA's non-medical penalty and Roth's early-withdrawal rules are
  * not modeled — see the design doc for the full list of Phase-4 simplifications). Withdrawals
  * gross-up so the NET matches the spending need; an RMD-forced surplus is reinvested rather than
- * lost. `otherIncome` (pension/rental placeholder) is NOT taxed in Phase 4 — Social Security's
- * own taxation (tax.taxableSocialSecurity) wires in when Phase 5 adds a real benefit amount.
+ * lost. `otherIncome` (pension/rental placeholder) is still NOT taxed (a deliberate, documented
+ * v1 boundary) — but SOCIAL SECURITY (Phase 5) IS: when `socialSecurityStartingBenefit` +
+ * `socialSecurityClaimingYear` are given, the benefit (COLA-compounded from the year after
+ * claiming, optionally haircut from a solvency-lever start year) offsets the spending gap like
+ * `otherIncome` does, AND its taxable portion (tax.taxableSocialSecurity's provisional-income
+ * formula) adds to ordinary taxable income — the first real guaranteed-income source properly
+ * taxed. See project()'s docs for how the starting benefit gets computed from earnings.
  *
  * Model (per year, pre-tax path):
  *   desired (nominal) = strategy==='fixedPercent' ? startOfYearTotal * withdrawalPercent
@@ -347,6 +363,15 @@ function solveTaxYear(p) {
  * @param {object} [p.standardDeductionIndexingRate] setting (per year); default 0
  * @param {number} [p.stateTaxRate] flat rate; default 0 (e.g. TN)
  * @param {number} [p.birthYear] enables RMD forcing + the standard deduction's age-65 addition
+ * @param {number} [p.socialSecurityStartingBenefit] annual $ benefit as of the claiming year
+ *   (design doc §6) — see project()'s docs for how this gets computed from earnings
+ * @param {number} [p.socialSecurityClaimingYear] first year the benefit is received; before it,
+ *   the benefit is 0
+ * @param {object} [p.colaRate] setting (per year); annual COLA applied from the year AFTER
+ *   claiming onward; default 0
+ * @param {number} [p.solvencyHaircutStartYear] if set, the benefit is multiplied by
+ *   solvencyHaircutFactor from this year on (design doc §6's trust-fund-depletion lever)
+ * @param {number} [p.solvencyHaircutFactor] default 1 (no haircut)
  * @returns {{startYear:number, endYear:number, years:object[], firstDepletionYear:number|null}}
  */
 export function projectDecumulation(p) {
@@ -371,6 +396,11 @@ export function projectDecumulation(p) {
   if (taxMode && !Number.isInteger(p.anchorYear)) {
     throw new Error('projectDecumulation: anchorYear is required when taxTables is provided');
   }
+  const ssStartingBenefit = num(p.socialSecurityStartingBenefit);
+  const ssClaimingYear = Number.isInteger(p.socialSecurityClaimingYear) ? p.socialSecurityClaimingYear : null;
+  const colaRate = p.colaRate ?? { default: 0 };
+  const haircutStartYear = Number.isInteger(p.solvencyHaircutStartYear) ? p.solvencyHaircutStartYear : null;
+  const haircutFactor = p.solvencyHaircutFactor != null ? num(p.solvencyHaircutFactor) : 1;
 
   const bal = {};
   const taxStatus = {};
@@ -379,21 +409,36 @@ export function projectDecumulation(p) {
 
   const years = [];
   let cumInflation = num(p.startCumulativeInflation) || 1;
+  // Relative to the claiming year; starts compounding the year AFTER claiming. If claiming
+  // happened BEFORE this function's startYear (e.g. claimed while still in the accumulation
+  // phase, which projectDecumulation never iterates), seed cumCOLA for the skipped years so the
+  // benefit is correctly grown once payments start here — otherwise those years' COLA would
+  // silently vanish and understate every subsequent payment.
+  let cumCOLA = (ssClaimingYear != null && startYear > ssClaimingYear)
+    ? cumulativeFactor(colaRate, ssClaimingYear, startYear - 1)
+    : 1;
   let firstDepletionYear = null;
 
   for (let year = startYear; year <= endYear; year++) {
     cumInflation *= 1 + num(resolve(inflation, { year }));
+
+    let ssBenefitNominal = 0;
+    if (ssClaimingYear != null && year >= ssClaimingYear) {
+      if (year > ssClaimingYear) cumCOLA *= 1 + num(resolve(colaRate, { year }));
+      const haircut = haircutStartYear != null && year >= haircutStartYear ? haircutFactor : 1;
+      ssBenefitNominal = ssStartingBenefit * cumCOLA * haircut;
+    }
 
     const startTotal = Object.values(bal).reduce((s, v) => s + v, 0);
     const desired = strategy === 'fixedPercent'
       ? startTotal * num(resolve(withdrawalPercent, { year }))
       : num(resolve(spending, { year })) * cumInflation;
     const otherIncomeNominal = num(resolve(otherIncome, { year })) * cumInflation;
-    const gap = Math.max(0, desired - otherIncomeNominal);
+    const gap = Math.max(0, desired - otherIncomeNominal - ssBenefitNominal);
 
     const seqAccounts = accounts.map((a) => ({ id: a.id, balance: bal[a.id], taxStatus: taxStatus[a.id], basisFraction: basisFraction[a.id] }));
 
-    let withdrawals, reinvestment, shortfall, tax = 0, ordinaryTaxableIncome = 0, capitalGain = 0;
+    let withdrawals, reinvestment, shortfall, tax = 0, ordinaryTaxableIncome = 0, capitalGain = 0, taxableSS = 0;
     if (taxMode) {
       const age = Number.isInteger(p.birthYear) ? year - p.birthYear : null;
       const rmdFloors = {};
@@ -413,9 +458,11 @@ export function projectDecumulation(p) {
         targetNet: gap, accounts: seqAccounts, sequencing, rmdFloors,
         filingStatus: p.filingStatus, age65Count: age != null && age >= 65 ? 1 : 0,
         yearTable, stateTaxRate: p.stateTaxRate,
+        socialSecurityBenefit: ssBenefitNominal, fixedTables: p.taxTables.fixed,
       });
       withdrawals = solved.withdrawals; reinvestment = solved.reinvestment; shortfall = solved.shortfall;
       tax = solved.tax; ordinaryTaxableIncome = solved.ordinaryTaxableIncome; capitalGain = solved.capitalGain;
+      taxableSS = solved.taxableSocialSecurity;
     } else {
       const seq = sequenceWithdrawal(gap, seqAccounts, sequencing);
       withdrawals = seq.withdrawals; shortfall = seq.shortfall;
@@ -437,12 +484,14 @@ export function projectDecumulation(p) {
     const totals = rowTotals(acc, ['withdrawal', 'reinvestment']);
     totals.spendingNeed = desired;
     totals.otherIncome = otherIncomeNominal;
+    totals.socialSecurity = ssBenefitNominal;
+    totals.taxableSocialSecurity = taxableSS;
     totals.gap = gap;
     totals.shortfall = shortfall;
     totals.tax = tax;
     totals.ordinaryTaxableIncome = ordinaryTaxableIncome;
     totals.capitalGain = capitalGain;
-    totals.netSpendable = otherIncomeNominal + (totals.withdrawal - tax - totals.reinvestment);
+    totals.netSpendable = otherIncomeNominal + ssBenefitNominal + (totals.withdrawal - tax - totals.reinvestment);
 
     if (shortfall > 1e-9 && firstDepletionYear === null) firstDepletionYear = year;
 
@@ -456,6 +505,7 @@ export function projectDecumulation(p) {
         endBalance: totals.endBalance / cumInflation,
         spendingNeed: totals.spendingNeed / cumInflation,
         otherIncome: totals.otherIncome / cumInflation,
+        socialSecurity: totals.socialSecurity / cumInflation,
         withdrawal: totals.withdrawal / cumInflation,
         shortfall: totals.shortfall / cumInflation,
         tax: totals.tax / cumInflation,
@@ -499,12 +549,39 @@ export function projectDecumulation(p) {
  * @param {number} [p.stateTaxRate] default 0
  * @param {number} [p.birthYear] enables RMDs + age-65 standard deduction; also, when given,
  *   every row in the returned `years` gets an `age` field (year - birthYear)
+ * @param {object} [p.earnings] setting (per year), wage-indexed-equivalent annual $ — Social
+ *   Security (Phase 5), requires claimingAge/careerStartYear/birthYear/taxTables too. See
+ *   socialsecurity.js's docs for what "wage-indexed-equivalent" means (a v1 simplification).
+ * @param {number} [p.careerStartYear] first year of SS-covered earnings
+ * @param {number} [p.claimingAge] age Social Security is claimed (62-70, whole years)
+ * @param {object} [p.colaRate] setting (per year); default 0
+ * @param {number} [p.solvencyHaircutStartYear] trust-fund-depletion lever; unset = no haircut
+ * @param {number} [p.solvencyHaircutFactor] default 1 (no haircut) — e.g. 0.77 for the OASI
+ *   trust fund's projected ~77%-payable scenario starting 2033
  * @returns {{baseYear:number, retirementYear:number, horizonYear:number, years:object[], firstDepletionYear:number|null}}
  */
 export function project(p) {
   const { baseYear, retirementYear, horizonYear, accounts } = p;
   if (!Number.isInteger(horizonYear) || horizonYear < retirementYear) {
     throw new Error('project: horizonYear must be an integer >= retirementYear');
+  }
+
+  // Social Security (Phase 5): opt-in, requires an earnings history + claiming age + birth year
+  // + tax tables (the PIA bend points live there). Computed ONCE here (not per decumulation
+  // year — it doesn't depend on withdrawals) using earnings from careerStartYear..retirementYear.
+  let socialSecurityStartingBenefit = 0;
+  let socialSecurityClaimingYear = null;
+  const ssMode = p.claimingAge != null && p.taxTables && Number.isInteger(p.birthYear) && p.earnings && Number.isInteger(p.careerStartYear);
+  if (ssMode) {
+    if (!Number.isInteger(p.anchorYear)) throw new Error('project: anchorYear is required for Social Security estimation');
+    const pia = estimatePIA({
+      earnings: p.earnings, careerStartYear: p.careerStartYear, retirementYear,
+      birthYear: p.birthYear, tables: p.taxTables, anchorYear: p.anchorYear,
+      wageIndexingRate: p.wageGrowth, // bend points scale with wages (AWI), not prices — reuses the accumulation-phase wage-growth assumption rather than adding a dedicated knob
+    });
+    const fra = fullRetirementAge(p.birthYear);
+    socialSecurityStartingBenefit = benefitAtClaimingAge(pia, p.claimingAge, fra, p.taxTables.socialSecurity);
+    socialSecurityClaimingYear = Math.round(p.birthYear + p.claimingAge);
   }
 
   const acc = projectAccumulation({
@@ -536,6 +613,8 @@ export function project(p) {
       filingStatus: p.filingStatus, taxTables: p.taxTables, anchorYear: p.anchorYear,
       bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,
       stateTaxRate: p.stateTaxRate, birthYear: p.birthYear,
+      socialSecurityStartingBenefit, socialSecurityClaimingYear,
+      colaRate: p.colaRate, solvencyHaircutStartYear: p.solvencyHaircutStartYear, solvencyHaircutFactor: p.solvencyHaircutFactor,
     });
     decYears = dec.years;
     firstDepletionYear = dec.firstDepletionYear;
