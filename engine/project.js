@@ -265,6 +265,11 @@ function solveTaxYear(p) {
     grossGuess = Math.max(0, grossGuess + (p.targetNet - netAchieved));
   }
 
+  // TODO (future work, noted 2026-07-21): this always reinvests an RMD-forced surplus. That's a
+  // reasonable default, not the only sane one — a selectable "forced spending" mode (surplus
+  // counts as extra spending that year, called out distinctly rather than silently reinvested)
+  // is a real, requested alternative. This is exactly where that mode would branch. See the
+  // design doc's §5a for the full writeup.
   const surplus = Math.max(0, last.netAchieved - p.targetNet);
   const reinvestment = Object.fromEntries(accounts.map((a) => [a.id, 0]));
   if (surplus > 1e-9) {
