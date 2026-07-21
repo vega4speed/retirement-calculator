@@ -20,15 +20,16 @@ Static, zero-dependency retirement-readiness calculator (vanilla JS, no build st
 index.html            app entry point
 engine/               pure calculation modules (unit-tested)
   resolver.js           the override resolver — DONE (implemented + tested)
-  project.js            year-by-year projection            — stub
+  project.js            accumulation projection — DONE (growth+contributions); decumulation next
   tax.js                brackets / std ded / LTCG / SS tax / RMDs — stub
   socialsecurity.js     earnings → AIME → PIA → claiming   — stub
   strategies.js         withdrawal amount + sequencing     — stub
 ui/                   vanilla-JS UI (no framework, no deps)
-  app.js                app shell: accounts editor + one live setting; localStorage persistence
+  app.js                app shell: accounts + assumptions + projection; localStorage persistence
   accounts-editor.js    enter/edit accounts, tax statuses, balances, cost basis
   setting-control.js    the reusable Simple/Expand knob, with a live resolved preview
-  dom.js, formats.js    tiny DOM builder + value<->input formatting helpers
+  projection-view.js    summary tiles + the two-series chart (today's $ vs nominal) + table
+  dom.js, formats.js    tiny DOM builder (incl. SVG) + value<->input formatting helpers
 data/                 tax-tables.json + EXAMPLE profile/snapshot/scenario templates
 schemas/              JSON Schemas for profile / snapshot / scenario
 test/                 node:test suites (smoke + resolver)
@@ -42,8 +43,9 @@ test/                 node:test suites (smoke + resolver)
 
 ## Status
 
-The override resolver and the accounts + Simple/Expand UI are done and tested. The projection,
-tax, Social Security, and withdrawal-strategy engines are stubs in progress.
+Done & tested: the override resolver, the accounts + Simple/Expand UI, and the accumulation
+projection (growth + contributions → retirement, charted in today's dollars, with a hover
+crosshair and table view). In progress: decumulation, taxes, Social Security, withdrawal strategies.
 
 > `data/tax-tables.json` figures are UNVERIFIED placeholders — reconcile against current IRS
 > tables (and current law) before the tax engine relies on them.

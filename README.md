@@ -34,12 +34,12 @@ value in Simple mode, or Expand to override it per account, per year, or per acc
 ```
 index.html          the app entry point
 engine/             pure calculation modules (no DOM, no I/O) — unit-tested
-  resolver.js         the override resolver (implemented + tested)
-  project.js          year-by-year projection      (in progress)
+  resolver.js         the override resolver (done + tested)
+  project.js          accumulation projection (done + tested); decumulation in progress
   tax.js              brackets / std ded / LTCG / SS taxation / RMDs (in progress)
   socialsecurity.js   earnings → AIME → PIA → claiming            (in progress)
   strategies.js       withdrawal amount + tax-aware sequencing    (in progress)
-ui/                 vanilla-JS UI (accounts editor + the Simple/Expand control)
+ui/                 vanilla-JS UI (accounts, Simple/Expand controls, projection chart)
 data/               tax-tables.json + example profile/snapshot/scenario templates
 schemas/            JSON Schemas for profile / snapshot / scenario
 test/               node:test suites
@@ -47,8 +47,10 @@ test/               node:test suites
 
 ## Status
 
-Early build. The override resolver and the accounts + Simple/Expand UI are done and tested; the
-projection, tax, Social Security, and withdrawal-strategy engines are in progress.
+Early build. Done & tested: the override resolver, the accounts + Simple/Expand UI, and the
+**accumulation projection** — year-by-year growth + contributions to retirement, charted in
+today's dollars (with a hover crosshair and a table view). In progress: decumulation, taxes,
+Social Security, and withdrawal strategies.
 
 > **Note:** `data/tax-tables.json` figures are unverified placeholders and must be reconciled
 > against current IRS tables before the tax engine relies on them.

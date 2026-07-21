@@ -18,6 +18,23 @@ export function h(tag, props = {}, ...children) {
   return el;
 }
 
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+/** s('rect', {x:0, width:10, onmousemove:fn}, child...) → SVGElement. All props are attributes. */
+export function s(tag, props = {}, ...children) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+    else el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c == null || c === false) continue;
+    el.append(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  return el;
+}
+
 /** Remove all children of an element. */
 export function clear(el) {
   while (el.firstChild) el.removeChild(el.firstChild);

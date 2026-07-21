@@ -1,15 +1,16 @@
-// app.js — Phase 1 app shell: enter accounts into a snapshot, and drive one setting
-// (return rate) through the Simple/Expand control so the resolver is visibly working
-// end-to-end. Static page, no backend.
+// app.js — app shell. Enter accounts into a snapshot, set the accumulation assumptions
+// (return, contributions, inflation, wage growth) via the Simple/Expand controls, pick a
+// retirement year, and see the year-by-year projection (chart + table) in today's dollars.
 //
-// Persistence is deliberately client-only so this can be HOSTED (e.g. GitHub Pages) without
-// any personal data leaving the browser: state auto-saves to localStorage, and the same data
-// can be exported/imported as a JSON file for backup or moving between browsers. Nothing is
-// ever uploaded, and real balances must never be committed to the (public) hosting repo.
+// Persistence is client-only so this can be HOSTED (e.g. GitHub Pages) with no personal data
+// leaving the browser: state auto-saves to localStorage; Export/Import is for backups. Nothing
+// is uploaded, and real balances must never be committed to the (public) hosting repo.
 
 import { h, clear, download } from './dom.js';
 import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
+import { createProjectionView } from './projection-view.js';
+import { projectAccumulation } from '../engine/project.js';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const STORAGE_KEY = 'retirement-calc:v1';
@@ -22,6 +23,13 @@ const EXAMPLE_ACCOUNTS = [
   { id: 'ex-cash', label: 'Example cash / savings', ownerId: 'me', taxStatus: 'cash', balance: 20000 },
 ];
 
+const defaultAssumptions = () => ({
+  returnRate: { default: 0.07 },
+  contributions: { default: 0 },
+  inflation: { default: 0.03 },
+  wageGrowth: { default: 0.03 },
+});
+
 export function mount(root) {
   // --- state ---------------------------------------------------------------
   const snapshot = {
@@ -31,14 +39,17 @@ export function mount(root) {
     asOf: todayISO(),
     accounts: [],
   };
-  // one demo setting so the resolver is exercised live; more knobs arrive in later phases.
-  let returnRate = { default: 0.1 };
+  let assumptions = defaultAssumptions();
+  const baseYear = () => parseInt(String(snapshot.asOf).slice(0, 4), 10) || new Date().getFullYear();
+  const retirement = { year: baseYear() + 25 };
 
   const acctSummary = () => snapshot.accounts.map((a) => ({ id: a.id, label: a.label || a.id }));
+  const projectionView = createProjectionView();
+  let acctAwareControls = [];
 
   // --- persistence (localStorage only) -------------------------------------
   function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ snapshot, returnRate })); } catch { /* private mode / disabled */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ snapshot, assumptions, retirement })); } catch { /* disabled */ }
   }
   function loadPersisted() {
     try {
@@ -46,13 +57,15 @@ export function mount(root) {
       if (!raw) return;
       const data = JSON.parse(raw);
       if (data.snapshot) applySnapshot(data.snapshot);
-      if (data.returnRate && typeof data.returnRate === 'object') returnRate = data.returnRate;
+      if (data.assumptions && typeof data.assumptions === 'object') assumptions = { ...defaultAssumptions(), ...data.assumptions };
+      if (data.retirement && Number.isFinite(data.retirement.year)) retirement.year = data.retirement.year;
     } catch { /* ignore corrupt state */ }
   }
   function clearSaved() {
     try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     snapshot.accounts.length = 0;
-    returnRate = { default: 0.1 };
+    assumptions = defaultAssumptions();
+    retirement.year = baseYear() + 25;
     rebuild();
   }
 
@@ -69,8 +82,28 @@ export function mount(root) {
     }
   }
 
+  // --- projection ----------------------------------------------------------
+  function computeProjection() {
+    const accounts = snapshot.accounts.map((a) => ({ id: a.id, balance: Number(a.balance) || 0 }));
+    if (!accounts.length) return null;
+    const startYear = baseYear();
+    const endYear = Math.max(startYear, Math.round(retirement.year) || startYear);
+    return projectAccumulation({
+      startYear, endYear, accounts,
+      returnRate: assumptions.returnRate,
+      contributions: assumptions.contributions,
+      wageGrowth: assumptions.wageGrowth,
+      inflation: assumptions.inflation,
+    });
+  }
+  function refreshProjection() {
+    const r = computeProjection();
+    if (r) projectionView.render(r); else projectionView.clearView();
+  }
+
   // --- helpers -------------------------------------------------------------
   const section = (title, ...children) => h('section', { class: 'card' }, h('h2', {}, title), ...children);
+  const onEdit = () => { persist(); refreshProjection(); };
 
   function replaceAccounts(list) {
     snapshot.accounts.length = 0;
@@ -102,22 +135,49 @@ export function mount(root) {
     return h('span', {}, h('button', { class: 'ghost', onclick: () => input.click() }, 'Import JSON'), input);
   }
 
+  function settingRow(key, label, kind, perAccount) {
+    const control = createSettingControl({
+      setting: assumptions[key],
+      label,
+      kind,
+      accounts: perAccount ? acctSummary() : [],
+      baseYear: baseYear() + 1,
+      onChange: onEdit,
+    });
+    if (perAccount) acctAwareControls.push(control);
+    return control.el;
+  }
+
+  function retirementRow() {
+    const hint = h('span', { class: 'muted small' });
+    const setHint = () => { hint.textContent = `in ${Math.max(0, Math.round(retirement.year) - baseYear())} yr(s)`; };
+    setHint();
+    const input = h('input', {
+      type: 'number', step: '1', value: retirement.year, class: 'num yr',
+      onchange: (e) => {
+        const v = parseInt(e.target.value, 10);
+        retirement.year = Number.isFinite(v) ? Math.max(baseYear(), v) : baseYear();
+        e.target.value = retirement.year;
+        setHint(); onEdit();
+      },
+    });
+    return h('div', { class: 'setting' },
+      h('div', { class: 'setting-head' },
+        h('label', { class: 'setting-label' }, 'Retirement year'),
+        h('span', { class: 'field' }, input),
+        hint,
+      ));
+  }
+
   // --- view ----------------------------------------------------------------
   const body = h('div');
 
   function rebuild() {
-    // Build the control first so the editor's onChange can push account changes into it.
-    const control = createSettingControl({
-      setting: returnRate,
-      label: 'Assumed rate of return',
-      kind: 'percent',
-      accounts: acctSummary(),
-      onChange: () => persist(),
-    });
+    acctAwareControls = [];
     const editor = createAccountsEditor({
       accounts: snapshot.accounts,
       ownerId: snapshot.profileId,
-      onChange: () => { control.setAccounts(acctSummary()); persist(); },
+      onChange: () => { acctAwareControls.forEach((c) => c.setAccounts(acctSummary())); persist(); refreshProjection(); },
     });
 
     clear(body);
@@ -132,11 +192,19 @@ export function mount(root) {
           h('button', { class: 'ghost', onclick: () => { if (confirm('Clear all saved data in this browser?')) clearSaved(); } }, 'Clear'),
         ),
       ),
-      section('2 · Settings preview (Simple / Expand)',
-        h('p', { class: 'muted' }, 'One knob shown for now. Set a single value, or Expand to override it per account, per year, or per account-per-year — the preview shows exactly which override level wins for each cell.'),
-        control.el,
+      section('2 · Assumptions',
+        h('p', { class: 'muted' }, 'Set one value, or Expand any knob to override it per account and/or per year. Contributions are the base-year annual amount, escalated by wage growth.'),
+        retirementRow(),
+        settingRow('returnRate', 'Rate of return', 'percent', true),
+        settingRow('contributions', 'Annual contribution', 'money', true),
+        settingRow('inflation', 'Inflation', 'percent', false),
+        settingRow('wageGrowth', 'Wage growth', 'percent', false),
+      ),
+      section("3 · Projection to retirement (today's dollars)",
+        projectionView.el,
       ),
     );
+    refreshProjection();
   }
 
   // --- init ----------------------------------------------------------------
@@ -146,7 +214,7 @@ export function mount(root) {
   root.append(
     h('header', { class: 'app-header' },
       h('h1', {}, 'Retirement Calculator'),
-      h('p', { class: 'muted' }, 'Accounts input + the general→granular setting control. Saved only in this browser.')),
+      h('p', { class: 'muted' }, 'Project your accounts forward to retirement, in today’s dollars. Saved only in this browser.')),
     body,
   );
   rebuild();
