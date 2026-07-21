@@ -14,6 +14,26 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const taxTables = JSON.parse(readFileSync(join(root, 'data/tax-tables.json'), 'utf8'));
 const row = (r, year) => r.years.find((y) => y.year === year);
 
+test('REGRESSION: a well-funded portfolio in tax mode is never falsely flagged as depleted', () => {
+  // Bug (fixed 2026-07-21): the gross-up loop's $0.01 convergence tolerance leaked through as a
+  // fake "shortfall" on essentially every year (since netAchieved can land a few cents under
+  // target at convergence), which latched firstDepletionYear onto the very first decumulation
+  // year regardless of actual portfolio health. A large, comfortably-funded portfolio here must
+  // report NO depletion across a long multi-year run with real growth and inflation in play.
+  const r = projectDecumulation({
+    startYear: 2026, endYear: 2060,
+    accounts: [
+      { id: 'ira', balance: 2000000, taxStatus: 'taxDeferred' },
+      { id: 'brk', balance: 500000, taxStatus: 'taxable', basisFraction: 0.6 },
+    ],
+    returnRate: { default: 0.06 }, inflation: { default: 0.03 }, spending: { default: 50000 },
+    filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0.03 }, standardDeductionIndexingRate: { default: 0.03 },
+  });
+  assert.equal(r.firstDepletionYear, null);
+  for (const y of r.years) assert.equal(y.totals.shortfall, 0, `year ${y.year} should have zero shortfall`);
+});
+
 test('gross-up on a tax-deferred withdrawal converges to the exact algebraic solution (single, 2026)', () => {
   // net(G) = 0.88G + 2180 in the 12% bracket (stdDeduction 16100, 10%-then-12% ladder) ->
   // solving net(G)=50000 gives G = 47820/0.88 = 54340.909090909...

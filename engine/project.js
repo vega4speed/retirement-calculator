@@ -253,14 +253,16 @@ function solveTaxYear(p) {
   let grossGuess = Math.max(0, p.targetNet);
   let last = null;
   let lastTotalWithdrawn = -1;
+  let exhausted = false; // true only when the LAST round hit the portfolio's total balance cap
   for (let i = 0; i < 8; i++) {
     const { withdrawals, totalWithdrawn } = sequenceWithdrawal(grossGuess, accounts, sequencing, rmdFloors);
     const { ordinaryTaxableIncome, gain, tax } = taxFor(withdrawals);
     const netAchieved = totalWithdrawn - tax;
     last = { withdrawals, totalWithdrawn, tax, ordinaryTaxableIncome, gain, netAchieved };
-    if (totalWithdrawn >= totalAvailable - 1e-6) break;           // portfolio exhausted
-    if (totalWithdrawn === lastTotalWithdrawn) break;              // pinned by floors; no further movement possible
-    if (Math.abs(netAchieved - p.targetNet) < 0.01) break;         // converged
+    exhausted = totalWithdrawn >= totalAvailable - 1e-6;
+    if (exhausted) break;                                          // portfolio exhausted — a real shortfall
+    if (totalWithdrawn === lastTotalWithdrawn) break;              // pinned by floors; no further movement possible (surplus, not a shortfall)
+    if (Math.abs(netAchieved - p.targetNet) < 0.01) break;         // converged — within tolerance, NOT a shortfall
     lastTotalWithdrawn = totalWithdrawn;
     grossGuess = Math.max(0, grossGuess + (p.targetNet - netAchieved));
   }
@@ -286,7 +288,10 @@ function solveTaxYear(p) {
     ordinaryTaxableIncome: last.ordinaryTaxableIncome,
     capitalGain: last.gain,
     netAchieved: last.netAchieved,
-    shortfall: Math.max(0, p.targetNet - last.netAchieved),
+    // Only report a shortfall when the portfolio was genuinely exhausted — NOT when the loop
+    // simply converged within its $0.01 tolerance (that residual is solver slack, not a real
+    // funding gap, and reporting it as one falsely flagged "depleted" on almost every year).
+    shortfall: exhausted ? Math.max(0, p.targetNet - last.netAchieved) : 0,
   };
 }
 
