@@ -6,6 +6,12 @@
 //
 // Pure and deterministic: no DOM, no I/O, no personal data. Every rate/amount is pulled through
 // the override resolver, so a single default or a per-account / per-year override both work.
+//
+// TODO (future work, noted 2026-07-21): `contributions` currently supports one mode — a flat
+// base-year amount escalated by wageGrowth. Planned expansion: selectable per-account modes
+// (flat unadjusted / flat adjusted by income growth / flat adjusted by inflation / % of income
+// [needs an income figure — not modeled yet] / HSA-specific max with its own escalation table).
+// See the design doc §4.1a for the full writeup.
 
 import { resolve } from './resolver.js';
 
