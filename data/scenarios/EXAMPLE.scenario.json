@@ -1,0 +1,23 @@
+{
+  "id": "example-base-case",
+  "label": "EXAMPLE — base case (10% return / 3% inflation / retire 62)",
+  "profileId": "example",
+  "snapshotId": "example-2026-07",
+  "assumptions": {
+    "returnRate": { "default": 0.10, "byAccount": { "ex-cash": 0.03 } },
+    "inflation": { "default": 0.03 },
+    "contributions": { "default": 0, "byAccount": { "ex-401k": 23000 } },
+    "wageGrowth": { "default": 0.03 },
+    "ssColaRate": { "default": 0.02, "byYear": { "2033": 0.01 } },
+    "spending": { "default": 80000 }
+  },
+  "retirement": { "retirementAge": 62 },
+  "socialSecurity": {
+    "claimingAge": 67,
+    "solvencyHaircut": { "startYear": 2033, "factor": 1.0 }
+  },
+  "withdrawal": { "strategy": "fixedReal", "sequencing": "conventional" },
+  "horizon": { "endAge": 95 },
+  "taxPolicy": { "taxTablesBaseYear": 2026, "tcjaSunset": false },
+  "_note": "Template demonstrating the {default, byAccount, byYear, byAccountYear} setting shape — returnRate overrides cash, contributions targets the 401(k), and ssColaRate has a per-year override. Values are illustrative, not advice."
+}

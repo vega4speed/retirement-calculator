@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "retirement/snapshot",
+  "title": "Snapshot",
+  "description": "Certain facts as of a date (plan.md §3.2). Treated as immutable once saved — the factual anchor a projection starts from. Take a new snapshot when fresh statements arrive; keep old ones as history.",
+  "type": "object",
+  "required": ["id", "label", "profileId", "asOf", "accounts"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "label": { "type": "string" },
+    "profileId": { "type": "string", "description": "Profile.id this snapshot belongs to." },
+    "asOf": { "type": "string", "format": "date" },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "ownerId", "taxStatus", "balance"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "ownerId": { "type": "string", "description": "person id within the profile" },
+          "taxStatus": {
+            "enum": ["taxDeferred", "roth", "taxable", "hsa", "cash"],
+            "description": "Drives withdrawal tax treatment (plan.md §3.3): taxDeferred=ordinary income + RMDs; roth=tax-free; taxable=cap gains on gain, needs costBasis; hsa=tax-free for medical; cash=principal untaxed."
+          },
+          "balance": { "type": "number", "minimum": 0 },
+          "costBasis": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Taxable accounts only. Gain = balance - costBasis; only the gain is taxed on withdrawal."
+          }
+        }
+      }
+    },
+    "notes": { "type": "string" },
+    "_note": { "type": "string" }
+  }
+}

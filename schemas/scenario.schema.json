@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "retirement/scenario",
+  "title": "Scenario",
+  "description": "A named bundle of adjustable assumptions over one snapshot (plan.md §3.3). Scenarios are what you save and compare side by side.",
+  "type": "object",
+  "required": ["id", "label", "profileId", "snapshotId", "assumptions", "retirement", "horizon"],
+  "additionalProperties": false,
+
+  "$defs": {
+    "setting": {
+      "type": "object",
+      "description": "The general→granular override value used by every adjustable knob (plan.md §2). 'default' is the simple-mode value; the optional maps are sparse overrides resolved most-specific-first: byAccountYear → byYear → byAccount → default.",
+      "required": ["default"],
+      "additionalProperties": false,
+      "properties": {
+        "default": { "description": "Simple-mode value (usually a number)." },
+        "byAccount": {
+          "type": "object",
+          "description": "Keyed by account id.",
+          "additionalProperties": true
+        },
+        "byYear": {
+          "type": "object",
+          "description": "Keyed by 4-digit calendar year.",
+          "propertyNames": { "pattern": "^[0-9]{4}$" },
+          "additionalProperties": true
+        },
+        "byAccountYear": {
+          "type": "object",
+          "description": "Keyed by '<accountId>|<year>', e.g. 'ex-roth|2041'.",
+          "propertyNames": { "pattern": "^.+\\|[0-9]{4}$" },
+          "additionalProperties": true
+        }
+      }
+    }
+  },
+
+  "properties": {
+    "id": { "type": "string" },
+    "label": { "type": "string" },
+    "profileId": { "type": "string" },
+    "snapshotId": { "type": "string" },
+
+    "assumptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["returnRate", "inflation", "spending"],
+      "properties": {
+        "returnRate": { "$ref": "#/$defs/setting" },
+        "inflation": { "$ref": "#/$defs/setting" },
+        "healthcareInflation": { "$ref": "#/$defs/setting" },
+        "contributions": { "$ref": "#/$defs/setting" },
+        "wageGrowth": { "$ref": "#/$defs/setting" },
+        "ssColaRate": { "$ref": "#/$defs/setting" },
+        "spending": {
+          "$ref": "#/$defs/setting",
+          "description": "Target retirement spending in TODAY'S dollars (plan.md §4.2/§7)."
+        }
+      }
+    },
+
+    "retirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Set one of retirementAge or retirementYear.",
+      "properties": {
+        "retirementAge": { "type": "number" },
+        "retirementYear": { "type": "integer" }
+      }
+    },
+
+    "socialSecurity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claimingAge": { "type": "number", "minimum": 62, "maximum": 70 },
+        "solvencyHaircut": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Trust-fund depletion lever (plan.md §6). factor 1.0 = full benefits (assume Congress fixes it); e.g. 0.77 = ~23% cut from startYear.",
+          "properties": {
+            "startYear": { "type": "integer" },
+            "factor": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "earningsHistoryRef": {
+          "type": "string",
+          "description": "Pointer to the earnings-history input used to estimate PIA from earnings (plan.md §6 / §13 decision)."
+        }
+      }
+    },
+
+    "withdrawal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": { "enum": ["fixedReal", "fixedPercent", "guardrails"] },
+        "sequencing": { "enum": ["conventional", "proportional", "bracketFill"] },
+        "bracketFillCeiling": {
+          "type": "number",
+          "description": "Top-of-bracket taxable-income target for bracketFill sequencing / Roth conversions (plan.md §5)."
+        }
+      }
+    },
+
+    "horizon": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "End of the projection. Set one of endAge or lifeExpectancy.",
+      "properties": {
+        "endAge": { "type": "number" },
+        "lifeExpectancy": { "type": "number" }
+      }
+    },
+
+    "taxPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "taxTablesBaseYear": { "type": "integer", "description": "Which year in tax-tables.json anchors the projection." },
+        "bracketIndexingRate": { "$ref": "#/$defs/setting" },
+        "standardDeductionIndexingRate": { "$ref": "#/$defs/setting" },
+        "tcjaSunset": { "type": "boolean", "description": "Model current-law reversion vs. extension (plan.md §8)." }
+      }
+    },
+
+    "_note": { "type": "string" }
+  }
+}

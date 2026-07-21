@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "retirement/profile",
+  "title": "Profile",
+  "description": "A person or hypothetical starting point (plan.md §3.1). v1 is single-person; couple mechanics come later as an additional person + profiles.",
+  "type": "object",
+  "required": ["id", "label", "filingStatus", "people"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "label": { "type": "string" },
+    "filingStatus": { "enum": ["mfj", "single", "hoh", "mfs", "qw"] },
+    "state": { "type": "string", "default": "TN" },
+    "stateIncomeTaxRate": {
+      "type": "number",
+      "default": 0,
+      "description": "Flat approximation of state income tax on ordinary income. TN = 0 (no wage income tax)."
+    },
+    "people": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "birthdate"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "birthdate": { "type": "string", "format": "date" }
+        }
+      }
+    },
+    "_note": { "type": "string" }
+  }
+}

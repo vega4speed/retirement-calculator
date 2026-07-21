@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Retirement Calculator</title>
+  <style>
+    :root { --bg:#fff; --fg:#1b1b1b; --muted:#666; --line:#e3e3e3; --card:#fafafa; --accent:#2563eb; }
+    * { box-sizing: border-box; }
+    body { font: 15px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.5rem; margin: 0; }
+    h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
+    h4 { margin: 0 0 .35rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    .app-header { margin-bottom: 1rem; }
+    .muted { color: var(--muted); }
+    .small { font-size: .85em; }
+    .card { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 1rem; margin: 1rem 0; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { padding: .3rem .5rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+    th.r, td.r { text-align: right; }
+    input, select, button { font: inherit; }
+    input.num { width: 8rem; text-align: right; border: 1px solid var(--line); border-radius: 5px; padding: .2rem .4rem; }
+    input.num.yr { width: 5.5rem; }
+    input.label { width: 100%; min-width: 9rem; border: 1px solid var(--line); border-radius: 5px; padding: .2rem .4rem; }
+    select { border: 1px solid var(--line); border-radius: 5px; padding: .2rem .3rem; background: #fff; }
+    .field { display: inline-flex; align-items: center; gap: .15rem; }
+    .affix { color: var(--muted); }
+    button { border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; padding: .3rem .7rem; cursor: pointer; }
+    button.ghost { background: #fff; color: var(--accent); }
+    button.link { border: none; background: none; color: var(--accent); padding: 0 .3rem; }
+    .toolbar, .add-row, .accounts-foot { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .6rem; }
+    .accounts-foot .total { margin-left: auto; font-weight: 600; }
+    .setting-head { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+    .setting-label { font-weight: 600; min-width: 12rem; }
+    .setting-body { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: .8rem; padding-top: .8rem; border-top: 1px dashed var(--line); }
+    @media (max-width: 46rem) { .setting-body { grid-template-columns: 1fr; } }
+    table.ovr, table.preview { font-size: .9em; }
+    /* preview cells coloured by which override level supplied the value */
+    .lvl-default { color: var(--muted); }
+    .lvl-byAccount { background: #eef6ff; }
+    .lvl-byYear { background: #fff3e0; }
+    .lvl-byAccountYear { background: #e9f9ee; font-weight: 600; }
+    footer { color: var(--muted); font-size: .85em; margin-top: 2rem; border-top: 1px solid var(--line); padding-top: .75rem; }
+    code { background: #f0f0f0; padding: 0 .25em; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <footer>
+    Your data is saved only in this browser and is never uploaded anywhere. Use
+    <strong>Export</strong> / <strong>Import</strong> to back it up or move it between devices.
+  </footer>
+  <script type="module">
+    import { mount } from './ui/app.js';
+    mount(document.getElementById('app'));
+  </script>
+</body>
+</html>

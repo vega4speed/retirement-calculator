@@ -1,0 +1,109 @@
+{
+  "_meta": {
+    "description": "Dated US federal tax tables consumed by the tax engine (plan.md §8). Data, not code — update this file for a new tax year rather than touching engine logic.",
+    "verificationStatus": "UNVERIFIED — confirm every figure against the IRS annual Rev. Proc. and CURRENT LAW before Phase 4 relies on it. The One Big Beautiful Bill Act (OBBBA, signed 2025-07) changed standard-deduction amounts and made the TCJA bracket structure permanent; the standard-deduction figures below reflect that best-effort but MUST be reconciled with (a) IRS releases and (b) the older pre-OBBBA table in ../../Taxes/CLAUDE.md, which currently disagrees (it shows 2025 MFJ $30,000 / 2026 ~$30,600).",
+    "amountsAreNominalUSD": true,
+    "bracketFormat": "Each bracket is {upTo, rate}. 'upTo' is the top of taxable income taxed at 'rate'; the final bracket uses upTo: null (no ceiling). Marginal, not effective.",
+    "sources": [
+      "IRS Rev. Proc. (annual inflation adjustments) — ordinary + LTCG brackets, standard deduction",
+      "SSA — PIA bend points, National Average Wage Index (AWI), benefit-taxation thresholds",
+      "IRS Uniform Lifetime Table (2022 revision) — RMD divisors"
+    ]
+  },
+
+  "years": {
+    "2025": {
+      "verified": false,
+      "ordinaryBrackets": {
+        "mfj": [
+          { "upTo": 23850, "rate": 0.10 },
+          { "upTo": 96950, "rate": 0.12 },
+          { "upTo": 206700, "rate": 0.22 },
+          { "upTo": 394600, "rate": 0.24 },
+          { "upTo": 501050, "rate": 0.32 },
+          { "upTo": 751600, "rate": 0.35 },
+          { "upTo": null, "rate": 0.37 }
+        ],
+        "single": [
+          { "upTo": 11925, "rate": 0.10 },
+          { "upTo": 48475, "rate": 0.12 },
+          { "upTo": 103350, "rate": 0.22 },
+          { "upTo": 197300, "rate": 0.24 },
+          { "upTo": 250525, "rate": 0.32 },
+          { "upTo": 626350, "rate": 0.35 },
+          { "upTo": null, "rate": 0.37 }
+        ]
+      },
+      "standardDeduction": {
+        "_note": "OBBBA-adjusted best-effort — VERIFY. Conflicts with ../../Taxes/CLAUDE.md.",
+        "mfj": 31500,
+        "single": 15750,
+        "hoh": 23625,
+        "additional65": { "married": 1600, "unmarried": 2000 }
+      },
+      "ltcgBrackets": {
+        "mfj": [
+          { "upTo": 96700, "rate": 0.00 },
+          { "upTo": 600050, "rate": 0.15 },
+          { "upTo": null, "rate": 0.20 }
+        ],
+        "single": [
+          { "upTo": 48350, "rate": 0.00 },
+          { "upTo": 533400, "rate": 0.15 },
+          { "upTo": null, "rate": 0.20 }
+        ]
+      },
+      "socialSecurityPIA": {
+        "_note": "PIA = 0.90*min(AIME, b1) + 0.32*(portion between b1 and b2) + 0.15*(portion above b2). Bend points are wage-indexed per year.",
+        "factors": [0.90, 0.32, 0.15],
+        "bendPointsMonthly": { "first": 1226, "second": 7391 }
+      }
+    },
+
+    "2026": {
+      "verified": false,
+      "_note": "STUB — populate from the IRS 2026 Rev. Proc. and reconcile with OBBBA before use. Base year for the live projection is intended to be 2026 (plan.md scenario.taxPolicy.taxTablesBaseYear).",
+      "ordinaryBrackets": { "mfj": [], "single": [] },
+      "standardDeduction": { "mfj": null, "single": null, "hoh": null, "additional65": { "married": null, "unmarried": null } },
+      "ltcgBrackets": { "mfj": [], "single": [] },
+      "socialSecurityPIA": { "factors": [0.90, 0.32, 0.15], "bendPointsMonthly": { "first": null, "second": null } }
+    }
+  },
+
+  "fixed": {
+    "_note": "Items NOT indexed to inflation — same nominal figures every year until Congress changes them.",
+    "socialSecurityBenefitTaxation": {
+      "_note": "Provisional-income thresholds fixed since the 1980s (plan.md §6/§8). Up to 50% taxable above the first threshold, up to 85% above the second.",
+      "mfj": { "tier50": 32000, "tier85": 44000 },
+      "single": { "tier50": 25000, "tier85": 34000 },
+      "maxTaxablePortion": 0.85
+    },
+    "niitThreshold": { "mfj": 250000, "single": 200000, "rate": 0.038 }
+  },
+
+  "socialSecurity": {
+    "averageWageIndex": {
+      "_note": "SSA National Average Wage Index series, used to index a person's past earnings before AIME (plan.md §6). Populate from ssa.gov (AWI table). Indexing freezes at age 60; later years count at face value. Left empty in Phase 0 — filled in Phase 5.",
+      "series": {}
+    },
+    "delayedRetirementCreditPerYear": 0.08,
+    "earlyClaimingReduction": {
+      "_note": "Actuarial reduction for claiming before Full Retirement Age: ~5/9 of 1% per month for the first 36 months early, ~5/12 of 1% per month beyond that. Encode precisely in Phase 5.",
+      "perMonthFirst36": 0.005556,
+      "perMonthBeyond36": 0.004167
+    }
+  },
+
+  "rmd": {
+    "_note": "SECURE 2.0: required beginning age is 73 (for those reaching 72 after 2022), rising to 75 in 2033. Uniform Lifetime Table (2022 revision) divisors below — RMD = prior-year-end balance / divisor. Table truncated at 100 in Phase 0; extend to 120+ before Phase 4.",
+    "requiredBeginningAge": 73,
+    "requiredBeginningAgeAfter2033": 75,
+    "uniformLifetime": {
+      "72": 27.4, "73": 26.5, "74": 25.5, "75": 24.6, "76": 23.7, "77": 22.9,
+      "78": 22.0, "79": 21.1, "80": 20.2, "81": 19.4, "82": 18.5, "83": 17.7,
+      "84": 16.8, "85": 16.0, "86": 15.2, "87": 14.4, "88": 13.7, "89": 12.9,
+      "90": 12.2, "91": 11.5, "92": 10.8, "93": 10.1, "94": 9.5, "95": 8.9,
+      "96": 8.4, "97": 7.8, "98": 7.3, "99": 6.8, "100": 6.4
+    }
+  }
+}

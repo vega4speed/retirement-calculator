@@ -1,0 +1,15 @@
+{
+  "id": "example-2026-07",
+  "label": "EXAMPLE — replace with your real balances",
+  "profileId": "example",
+  "asOf": "2026-07-21",
+  "accounts": [
+    { "id": "ex-401k", "label": "Example 401(k)", "ownerId": "me", "taxStatus": "taxDeferred", "balance": 100000 },
+    { "id": "ex-roth", "label": "Example Roth IRA", "ownerId": "me", "taxStatus": "roth", "balance": 50000 },
+    { "id": "ex-brokerage", "label": "Example brokerage", "ownerId": "me", "taxStatus": "taxable", "balance": 40000, "costBasis": 30000 },
+    { "id": "ex-hsa", "label": "Example HSA", "ownerId": "me", "taxStatus": "hsa", "balance": 15000 },
+    { "id": "ex-cash", "label": "Example cash / savings", "ownerId": "me", "taxStatus": "cash", "balance": 20000 }
+  ],
+  "notes": "Placeholder balances chosen only to exercise all five tax statuses — not real numbers.",
+  "_note": "Template only. Your real balances stay in your browser — never commit them to this repo."
+}

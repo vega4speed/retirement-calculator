@@ -1,0 +1,11 @@
+{
+  "id": "example",
+  "label": "EXAMPLE — replace with your own profile",
+  "filingStatus": "mfj",
+  "state": "TN",
+  "stateIncomeTaxRate": 0,
+  "people": [
+    { "id": "me", "label": "Me", "birthdate": "1900-01-01" }
+  ],
+  "_note": "Template only — demonstrates the profile schema. birthdate is a placeholder. v1 is single-person; a second person can be added later."
+}

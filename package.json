@@ -1,0 +1,10 @@
+{
+  "name": "retirement-calculator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Retirement-readiness calculator — pure JS engine + zero-dependency UI. Spec: plan.md. Folder guide: CLAUDE.md.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
