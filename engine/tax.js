@@ -37,6 +37,42 @@ export function bracketTax(income, brackets) {
   return tax;
 }
 
+/**
+ * Per-bracket breakdown of how `amount` gets taxed, for display ("how much falls in each
+ * bracket"). Mirrors bracketTax's marginal walk exactly but returns each touched segment
+ * instead of only the sum — `rows.reduce((s,r)=>s+r.tax,0)` always equals
+ * `bracketTax(base+amount,brackets) - bracketTax(base,brackets)`.
+ *
+ * `base` offsets where `amount` starts stacking (0 for ordinary income; ordinaryTaxableIncome
+ * for a capital-gains breakdown, matching capitalGainsTax's stacking — see resolveYearTable's
+ * caller in project.js for how the two compose).
+ * @param {number} amount
+ * @param {{upTo:number|null, rate:number}[]} brackets
+ * @param {number} [base] default 0
+ * @returns {{upTo:number|null, rate:number, amount:number, tax:number}[]} only brackets actually touched
+ */
+export function bracketBreakdown(amount, brackets, base = 0) {
+  const amt = Math.max(0, num(amount));
+  const rows = [];
+  if (amt <= 0) return rows;
+  const start = Math.max(0, num(base));
+  const end = start + amt;
+  let prevUpTo = 0;
+  for (const b of brackets) {
+    const upTo = b.upTo == null ? Infinity : b.upTo;
+    if (end <= prevUpTo) break;
+    if (upTo > start) {
+      const segStart = Math.max(prevUpTo, start);
+      const segEnd = Math.min(upTo, end);
+      const segAmount = segEnd - segStart;
+      if (segAmount > 0) rows.push({ upTo: b.upTo, rate: b.rate, amount: segAmount, tax: segAmount * b.rate });
+    }
+    prevUpTo = upTo;
+    if (end <= upTo) break;
+  }
+  return rows;
+}
+
 function scaleBrackets(brackets, factor) {
   return brackets.map((b) => ({ upTo: b.upTo == null ? null : b.upTo * factor, rate: b.rate }));
 }

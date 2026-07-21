@@ -13,6 +13,7 @@ import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
 import { project } from '../engine/project.js';
+import { resolveYearTable, bracketBreakdown } from '../engine/tax.js';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const STORAGE_KEY = 'retirement-calc:v1';
@@ -70,7 +71,23 @@ export async function mount(root) {
   };
 
   const acctSummary = () => snapshot.accounts.map((a) => ({ id: a.id, label: a.label || a.id }));
-  const projectionView = createProjectionView();
+
+  // Recomputes a year's ordinary + capital-gains bracket breakdown on demand (clicking a Tax
+  // cell), rather than storing it on every ledger row — cheap to redo, keeps the ledger lean.
+  function bracketBreakdownFor(row) {
+    if (!taxTables) return null;
+    const yearTable = resolveYearTable({
+      tables: taxTables, year: row.year, anchorYear: TAX_ANCHOR_YEAR,
+      bracketIndexingRate: assumptions.inflation, standardDeductionIndexingRate: assumptions.inflation,
+    });
+    const ordinary = bracketBreakdown(row.totals.ordinaryTaxableIncome, yearTable.ordinaryBrackets[filing.filingStatus]);
+    const ltcg = row.totals.capitalGain > 0
+      ? bracketBreakdown(row.totals.capitalGain, yearTable.ltcgBrackets[filing.filingStatus], row.totals.ordinaryTaxableIncome)
+      : [];
+    return { ordinary, ltcg };
+  }
+
+  const projectionView = createProjectionView({ bracketBreakdownFor });
   let acctAwareControls = [];
 
   // --- persistence (localStorage only) -------------------------------------
@@ -135,12 +152,14 @@ export async function mount(root) {
       withdrawalPercent: assumptions.withdrawalPercent,
       strategy: plan.strategy,
       sequencing: plan.sequencing,
-      // Tax is opt-in (engine/project.js): only passed through when the tables actually loaded.
+      // birthYear is passed unconditionally — it drives the table's age column even when tax
+      // tables didn't load (age display doesn't depend on tax being computed).
+      birthYear: Number.isFinite(filing.birthYear) ? filing.birthYear : undefined,
+      // The rest of tax is opt-in (engine/project.js): only passed through when tables loaded.
       // Bracket/standard-deduction indexing reuses the `inflation` assumption — a defensible
       // default ("brackets roughly keep pace with prices"); a dedicated knob is a later refinement.
       ...(taxTables ? {
         filingStatus: filing.filingStatus,
-        birthYear: Number.isFinite(filing.birthYear) ? filing.birthYear : undefined,
         taxTables, anchorYear: TAX_ANCHOR_YEAR,
         bracketIndexingRate: assumptions.inflation, standardDeductionIndexingRate: assumptions.inflation,
         stateTaxRate: assumptions.stateTaxRate,
@@ -202,7 +221,11 @@ export async function mount(root) {
 
   function yearRow(label, get, set, min) {
     const hint = h('span', { class: 'muted small' });
-    const setHint = () => { hint.textContent = `in ${Math.max(0, get() - baseYear())} yr(s)`; };
+    const setHint = () => {
+      const inYrs = Math.max(0, get() - baseYear());
+      const ageText = Number.isFinite(filing.birthYear) ? ` · age ${get() - filing.birthYear}` : '';
+      hint.textContent = `in ${inYrs} yr(s)${ageText}`;
+    };
     setHint();
     const input = h('input', {
       type: 'number', step: '1', value: get(), class: 'num yr',
@@ -226,7 +249,7 @@ export async function mount(root) {
         const v = parseInt(e.target.value, 10);
         filing.birthYear = Number.isFinite(v) ? v : filing.birthYear;
         e.target.value = filing.birthYear;
-        setHint(); onEdit();
+        persist(); rebuild(); // rebuild so the retirement/horizon-year age hints refresh too
       },
     });
     return h('div', { class: 'setting' }, h('div', { class: 'setting-head' },

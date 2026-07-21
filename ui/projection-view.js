@@ -183,35 +183,81 @@ function buildChart(result) {
   return h('div', {}, legend, wrap);
 }
 
-function buildTable(result) {
+function bracketDetailRow(colspan, breakdown) {
+  const section = (title, rows) => (!rows || !rows.length) ? null : h('div', { class: 'bracket-section' },
+    h('h5', {}, title),
+    h('table', { class: 'bracket-mini' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Rate'), h('th', { class: 'r' }, 'Amount at this rate'), h('th', { class: 'r' }, 'Tax'))),
+      h('tbody', {}, ...rows.map((row) => h('tr', {},
+        h('td', {}, `${(row.rate * 100).toFixed(0)}%`),
+        h('td', { class: 'r' }, usdFull(row.amount)),
+        h('td', { class: 'r' }, usdFull(row.tax)),
+      ))),
+    ),
+  );
+  const ordinary = section('Ordinary income brackets', breakdown?.ordinary);
+  const ltcg = section('Capital gains brackets', breakdown?.ltcg);
+  return h('tr', { class: 'bracket-detail' }, h('td', { colspan },
+    (ordinary || ltcg)
+      ? h('div', { class: 'bracket-detail-wrap' }, ordinary, ltcg)
+      : h('p', { class: 'muted small' }, 'No taxable income this year.'),
+  ));
+}
+
+function buildTable(result, opts = {}) {
   const rows = result.years;
   const hasTax = rows.some((r) => r.totals.tax);
+  const hasAge = rows.some((r) => r.age != null);
+  const { expandedYear, onToggleExpand, bracketBreakdownFor } = opts;
+  const colCount = 6 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0);
+
+  const bodyRows = [];
+  for (const r of rows) {
+    const clickableTax = hasTax && bracketBreakdownFor && r.phase === 'decumulation' && r.totals.tax > 0.005;
+    const taxCell = !hasTax ? null
+      : !r.totals.tax ? h('td', { class: 'r' }, '—')
+      : clickableTax
+        ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year) },
+            usdFull(r.totals.tax), ' ', expandedYear === r.year ? '▾' : '▸'))
+        : h('td', { class: 'r' }, usdFull(r.totals.tax));
+
+    bodyRows.push(h('tr', {},
+      h('td', {}, r.year),
+      h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
+      hasAge ? h('td', { class: 'r' }, r.age ?? '—') : null,
+      h('td', { class: 'r' }, r.totals.contribution ? usdFull(r.totals.contribution) : '—'),
+      h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(r.totals.withdrawal) : '—'),
+      taxCell,
+      hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(r.totals.netSpendable) : '—') : null,
+      h('td', { class: 'r' }, usdFull(r.totals.growth)),
+      h('td', { class: 'r' }, usdFull(r.totals.endBalance)),
+      h('td', { class: 'r' }, usdFull(r.real.endBalance)),
+    ));
+    if (clickableTax && expandedYear === r.year) {
+      bodyRows.push(bracketDetailRow(colCount, bracketBreakdownFor(r)));
+    }
+  }
+
   const table = h('table', { class: 'proj-table' },
     h('thead', {}, h('tr', {},
-      h('th', {}, 'Year'), h('th', {}, 'Phase'), h('th', { class: 'r' }, 'Contribution'),
+      h('th', {}, 'Year'), h('th', {}, 'Phase'),
+      hasAge ? h('th', { class: 'r' }, 'Age') : null,
+      h('th', { class: 'r' }, 'Contribution'),
       h('th', { class: 'r' }, 'Withdrawal'),
       hasTax ? h('th', { class: 'r' }, 'Tax') : null,
       hasTax ? h('th', { class: 'r' }, 'Net spendable') : null,
       h('th', { class: 'r' }, 'Growth'),
       h('th', { class: 'r' }, 'Balance (nominal)'), h('th', { class: 'r' }, "Balance (today's)"))),
-    h('tbody', {}, ...rows.map((r) => h('tr', {},
-      h('td', {}, r.year),
-      h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
-      h('td', { class: 'r' }, r.totals.contribution ? usdFull(r.totals.contribution) : '—'),
-      h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(r.totals.withdrawal) : '—'),
-      hasTax ? h('td', { class: 'r' }, r.totals.tax ? usdFull(r.totals.tax) : '—') : null,
-      hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(r.totals.netSpendable) : '—') : null,
-      h('td', { class: 'r' }, usdFull(r.totals.growth)),
-      h('td', { class: 'r' }, usdFull(r.totals.endBalance)),
-      h('td', { class: 'r' }, usdFull(r.real.endBalance)),
-    ))),
+    h('tbody', {}, ...bodyRows),
   );
   return h('div', { class: 'table-scroll' }, table);
 }
 
-export function createProjectionView() {
+export function createProjectionView(opts = {}) {
   const el = h('div');
+  const bracketBreakdownFor = opts.bracketBreakdownFor;
   let showTable = false;
+  let expandedYear = null;
   let current = null;
 
   function render() {
@@ -239,7 +285,13 @@ export function createProjectionView() {
         h('button', { class: 'ghost', onclick: () => { showTable = !showTable; render(); } }, showTable ? 'Hide table' : 'Show table'),
       ),
     ];
-    if (showTable) parts.push(buildTable(r));
+    if (showTable) {
+      parts.push(buildTable(r, {
+        expandedYear,
+        bracketBreakdownFor,
+        onToggleExpand: (year) => { expandedYear = expandedYear === year ? null : year; render(); },
+      }));
+    }
     el.append(...parts);
   }
 

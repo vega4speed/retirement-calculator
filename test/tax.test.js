@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   bracketTax,
+  bracketBreakdown,
   resolveYearTable,
   ordinaryTax,
   standardDeduction,
@@ -130,4 +131,32 @@ test('resolveYearTable with no indexing-rate settings passed defaults to no inde
 
 test('resolveYearTable throws for an anchor year not present in the tables', () => {
   assert.throws(() => resolveYearTable({ tables: realTables, year: 2026, anchorYear: 1999 }));
+});
+
+test('bracketBreakdown: rows sum to exactly bracketTax(income, brackets)', () => {
+  const rows = bracketBreakdown(25000, BRACKETS);
+  assert.deepEqual(rows, [
+    { upTo: 10000, rate: 0.10, amount: 10000, tax: 1000 },
+    { upTo: 40000, rate: 0.20, amount: 15000, tax: 3000 },
+  ]);
+  const sum = rows.reduce((s, r) => s + r.tax, 0);
+  approx(sum, bracketTax(25000, BRACKETS));
+});
+
+test('bracketBreakdown: amount of 0 or less returns no rows', () => {
+  assert.deepEqual(bracketBreakdown(0, BRACKETS), []);
+  assert.deepEqual(bracketBreakdown(-500, BRACKETS), []);
+});
+
+test('bracketBreakdown with a base offset matches the capital-gains stacking test exactly', () => {
+  // Same scenario as the capitalGainsTax stacking test: ordinary income 50000, gain 100000,
+  // 2026 MFJ LTCG brackets (0% to 98900, 15% to 613700, 20% above).
+  const t2026 = resolveYearTable({ tables: realTables, year: 2026, anchorYear: 2026 });
+  const rows = bracketBreakdown(100000, t2026.ltcgBrackets.mfj, 50000);
+  assert.deepEqual(rows, [
+    { upTo: 98900, rate: 0.00, amount: 48900, tax: 0 },
+    { upTo: 613700, rate: 0.15, amount: 51100, tax: 7665 },
+  ]);
+  const sum = rows.reduce((s, r) => s + r.tax, 0);
+  approx(sum, capitalGainsTax(100000, 50000, 'mfj', t2026));
 });

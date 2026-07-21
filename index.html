@@ -62,8 +62,15 @@
     /* projection table */
     .table-toggle { margin-top: .6rem; }
     .table-scroll { overflow: auto; margin-top: .5rem; max-height: 340px; }
-    .proj-table { font-size: .85rem; }
+    .proj-table { font-size: .85rem; border-collapse: separate; border-spacing: 0; }
     .proj-table td, .proj-table th { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .proj-table thead th { position: sticky; top: 0; background: var(--card); z-index: 1; box-shadow: 0 1px 0 var(--line); }
+    .tax-link { border: none; background: none; color: var(--accent); padding: 0; font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; }
+    tr.bracket-detail td { background: #f5f7fb; white-space: normal; }
+    .bracket-detail-wrap { display: flex; gap: 1.5rem; flex-wrap: wrap; padding: .4rem 0; }
+    .bracket-section h5 { margin: 0 0 .3rem; font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+    table.bracket-mini { font-size: .82rem; }
+    table.bracket-mini th, table.bracket-mini td { padding: .15rem .5rem; border-bottom: none; }
     footer { color: var(--muted); font-size: .85em; margin-top: 2rem; border-top: 1px solid var(--line); padding-top: .75rem; }
     code { background: #f0f0f0; padding: 0 .25em; border-radius: 3px; }
   </style>

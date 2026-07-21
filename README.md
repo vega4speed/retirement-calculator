@@ -54,8 +54,10 @@ a withdrawal strategy (fixed target or % of balance), tax-status-aware account s
 (forced by the SECURE 2.0 birth-year rule), federal ordinary-income and capital-gains tax with
 gross-up (withdrawals are increased so the *net* after tax hits your spending target), and
 portfolio-survival tracking through a horizon year — all charted in today's dollars with a
-retirement marker, hover crosshair, and a table view. In progress: Social Security and
-tax-bracket-aware withdrawal sequencing (Roth conversions, "fill to the top of a bracket").
+retirement marker, hover crosshair, and a table view. The table shows your age per year, sticky
+column headers, and a clickable Tax cell that expands to show exactly how much fell in each
+ordinary/capital-gains bracket that year. In progress: Social Security and tax-bracket-aware
+withdrawal sequencing (Roth conversions, "fill to the top of a bracket").
 
 Known simplifications, documented in the code: state tax is a flat rate (no state brackets);
 `otherIncome` (pension/rental placeholder) isn't taxed yet — Social Security's own taxation

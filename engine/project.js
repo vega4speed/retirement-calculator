@@ -497,7 +497,8 @@ export function projectDecumulation(p) {
  * @param {object} [p.bracketIndexingRate] setting; default 0
  * @param {object} [p.standardDeductionIndexingRate] setting; default 0
  * @param {number} [p.stateTaxRate] default 0
- * @param {number} [p.birthYear] enables RMDs + age-65 standard deduction
+ * @param {number} [p.birthYear] enables RMDs + age-65 standard deduction; also, when given,
+ *   every row in the returned `years` gets an `age` field (year - birthYear)
  * @returns {{baseYear:number, retirementYear:number, horizonYear:number, years:object[], firstDepletionYear:number|null}}
  */
 export function project(p) {
@@ -540,9 +541,13 @@ export function project(p) {
     firstDepletionYear = dec.firstDepletionYear;
   }
 
+  const withAge = Number.isInteger(p.birthYear)
+    ? (y) => ({ ...y, age: y.year - p.birthYear })
+    : (y) => y;
+
   const years = [
-    ...acc.years.map((y) => ({ ...y, phase: 'accumulation' })),
-    ...decYears.map((y) => ({ ...y, phase: 'decumulation' })),
+    ...acc.years.map((y) => withAge({ ...y, phase: 'accumulation' })),
+    ...decYears.map((y) => withAge({ ...y, phase: 'decumulation' })),
   ];
 
   return { baseYear, retirementYear, horizonYear, years, firstDepletionYear };

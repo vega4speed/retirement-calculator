@@ -22,7 +22,8 @@ engine/               pure calculation modules (unit-tested)
   resolver.js           the override resolver — DONE (implemented + tested)
   tax.js                brackets / std ded / LTCG / SS tax / RMDs — DONE (implemented + tested;
                          resolveYearTable() projects an anchor year's real figures forward via
-                         an indexing-rate setting, same pattern as inflation in project.js)
+                         an indexing-rate setting, same pattern as inflation in project.js;
+                         bracketBreakdown() powers the table's clickable-Tax-cell detail view)
   project.js            accumulation + decumulation, tax-aware — DONE (spending, withdrawal
                          strategy, tax-status sequencing, RMD forcing, capital-gains stacking,
                          gross-up, portfolio survival). Tax is opt-in: omit filingStatus/
@@ -38,12 +39,14 @@ ui/                   vanilla-JS UI (no framework, no deps)
   setting-control.js    the reusable Simple/Expand knob (supports `perAccount:false` for
                          household-level settings like spending), with a live resolved preview
   projection-view.js    stat tiles (incl. portfolio survival, lifetime tax) + the two-series
-                         chart (today's $ vs nominal, retirement marker) + table, both phases
+                         chart (today's $ vs nominal, retirement marker) + a table (both phases,
+                         sticky headers, an age column when birthYear is known, and a clickable
+                         Tax cell that expands a per-bracket breakdown row)
   dom.js, formats.js    tiny DOM builder (incl. SVG) + value<->input formatting helpers
 data/                 tax-tables.json (verified 2025/2026 figures) + EXAMPLE templates
 schemas/              JSON Schemas for profile / snapshot / scenario
 test/                 node:test suites (smoke, resolver, accumulation, decumulation, tax,
-                       decumulation-tax) — 75 passing
+                       decumulation-tax) — 79 passing
 ```
 
 ## Running
@@ -60,9 +63,15 @@ Done & tested: the override resolver, the accounts + Simple/Expand UI, and the f
 accumulation→decumulation projection — growth + contributions to retirement; then spending, a
 withdrawal strategy, tax-status-aware sequencing, RMDs (SECURE 2.0 birth-year rule), federal
 ordinary + capital-gains tax with gross-up, and portfolio survival to a horizon year — charted in
-today's dollars with a retirement marker, hover crosshair, and table view (now with tax/net-
-spendable columns). In progress: Social Security, tax-bracket-aware ("fill to the top of a
-bracket") withdrawal sequencing and Roth conversions.
+today's dollars with a retirement marker, hover crosshair, and table view (tax/net-spendable/age
+columns, sticky headers, and a clickable Tax cell showing the per-bracket breakdown). In
+progress: Social Security, tax-bracket-aware ("fill to the top of a bracket") withdrawal
+sequencing and Roth conversions.
+
+**Fixed 2026-07-21:** the portfolio-survival badge could falsely claim depletion on the very
+first decumulation year — `solveTaxYear`'s $0.01 gross-up convergence tolerance was leaking
+through as a fake `shortfall`. Only a genuinely exhausted portfolio (hit its total balance cap)
+reports a shortfall now; see the regression test in `test/decumulation-tax.test.js`.
 
 Known simplifications (see README's Status section for the full list): flat state tax rate (no
 state brackets); `otherIncome` isn't taxed yet (Phase 5's Social Security will be); taxable-
