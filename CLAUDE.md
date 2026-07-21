@@ -20,46 +20,57 @@ Static, zero-dependency retirement-readiness calculator (vanilla JS, no build st
 index.html            app entry point
 engine/               pure calculation modules (unit-tested)
   resolver.js           the override resolver — DONE (implemented + tested)
-  project.js            accumulation + decumulation — DONE, pre-tax (spending, withdrawal
-                         strategy, tax-status sequencing, portfolio survival); taxes/RMDs next
-  tax.js                brackets / std ded / LTCG / SS tax / RMDs — stub
+  tax.js                brackets / std ded / LTCG / SS tax / RMDs — DONE (implemented + tested;
+                         resolveYearTable() projects an anchor year's real figures forward via
+                         an indexing-rate setting, same pattern as inflation in project.js)
+  project.js            accumulation + decumulation, tax-aware — DONE (spending, withdrawal
+                         strategy, tax-status sequencing, RMD forcing, capital-gains stacking,
+                         gross-up, portfolio survival). Tax is opt-in: omit filingStatus/
+                         taxTables and it's the pure pre-tax Phase 3 behavior, unchanged.
   socialsecurity.js     earnings → AIME → PIA → claiming   — stub
   strategies.js         withdrawal amount + sequencing     — superseded by project.js's
-                         built-in sequencing for Phase 3; revisit for Phase 6 (bracket-fill,
-                         Roth conversions) which need the tax engine
+                         built-in sequencing; revisit for Phase 6 (bracket-fill withdrawals,
+                         Roth conversions, which need tax.js's ordinaryTax/resolveYearTable)
 ui/                   vanilla-JS UI (no framework, no deps)
   app.js                app shell: accounts + working-years + retirement-spending assumptions
                          + full-lifecycle projection; localStorage persistence
   accounts-editor.js    enter/edit accounts, tax statuses, balances, cost basis
   setting-control.js    the reusable Simple/Expand knob (supports `perAccount:false` for
                          household-level settings like spending), with a live resolved preview
-  projection-view.js    stat tiles (incl. portfolio survival) + the two-series chart (today's $
-                         vs nominal, with a retirement marker) + table, spanning both phases
+  projection-view.js    stat tiles (incl. portfolio survival, lifetime tax) + the two-series
+                         chart (today's $ vs nominal, retirement marker) + table, both phases
   dom.js, formats.js    tiny DOM builder (incl. SVG) + value<->input formatting helpers
-data/                 tax-tables.json + EXAMPLE profile/snapshot/scenario templates
+data/                 tax-tables.json (verified 2025/2026 figures) + EXAMPLE templates
 schemas/              JSON Schemas for profile / snapshot / scenario
-test/                 node:test suites (smoke, resolver, accumulation, decumulation)
+test/                 node:test suites (smoke, resolver, accumulation, decumulation, tax,
+                       decumulation-tax) — 75 passing
 ```
 
 ## Running
 
 - **Tests:** `npm test` (runs `node --test` over `test/*.test.js`, no deps to install).
 - **App:** serve over http — ES modules don't load from a bare `file://` open. E.g.
-  `python3 -m http.server 8000`, then open the printed URL.
+  `python3 -m http.server 8000`, then open the printed URL. `mount()` in `ui/app.js` is async —
+  it `fetch()`s `data/tax-tables.json` at startup; if that fetch fails (e.g. opened via bare
+  `file://`), the app degrades gracefully to pre-tax mode rather than breaking.
 
 ## Status
 
-Done & tested: the override resolver, the accounts + Simple/Expand UI, and the full
-accumulation→decumulation projection (growth + contributions to retirement; then spending, a
-withdrawal strategy, tax-status-aware sequencing, and portfolio survival to a horizon year) —
-charted in today's dollars with a retirement marker, hover crosshair, and table view. Pre-tax:
-no tax is computed and no RMDs are forced yet. In progress: taxes, RMDs, Social Security, and
-tax-bracket-aware withdrawal sequencing.
+Done & tested: the override resolver, the accounts + Simple/Expand UI, and the full **tax-aware**
+accumulation→decumulation projection — growth + contributions to retirement; then spending, a
+withdrawal strategy, tax-status-aware sequencing, RMDs (SECURE 2.0 birth-year rule), federal
+ordinary + capital-gains tax with gross-up, and portfolio survival to a horizon year — charted in
+today's dollars with a retirement marker, hover crosshair, and table view (now with tax/net-
+spendable columns). In progress: Social Security, tax-bracket-aware ("fill to the top of a
+bracket") withdrawal sequencing and Roth conversions.
 
-Known gaps: light theme only (no dark mode); no income modeling yet.
+Known simplifications (see README's Status section for the full list): flat state tax rate (no
+state brackets); `otherIncome` isn't taxed yet (Phase 5's Social Security will be); taxable-
+account cost basis is a constant fraction from the snapshot, not grown through contributions;
+HSA/Roth early-withdrawal penalties not modeled; light theme only; no income modeling yet.
 
-> `data/tax-tables.json` figures are UNVERIFIED placeholders — reconcile against current IRS
-> tables (and current law) before the tax engine relies on them.
+> `data/tax-tables.json` 2025/2026 figures are VERIFIED (IRS Rev. Proc. 2025-32 + cross-checked
+> secondary sources, see `_meta`). RMD divisors past age 100 are unverified approximations.
 
 Code comments cite "plan.md §N"; that's the author's private design doc — `README.md` summarizes
 the essentials it covers.

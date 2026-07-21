@@ -2,10 +2,13 @@
 //
 // Two phases compose into one ledger:
 //   - ACCUMULATION (projectAccumulation, Phase 2): growth + contributions, now → retirement.
-//   - DECUMULATION (projectDecumulation, Phase 3): spending need, tax-status-aware withdrawal
-//     sequencing, and portfolio-survival tracking, retirement → horizon. Deliberately PRE-TAX —
-//     withdrawals are gross dollar pulls with no tax computed and no RMDs forced yet. Taxes,
-//     RMDs, and tax-bracket-aware sequencing arrive in Phase 4/6 and layer onto this.
+//   - DECUMULATION (projectDecumulation, Phase 3+4): spending need, tax-status-aware withdrawal
+//     sequencing, portfolio-survival tracking, and — when tax inputs are supplied (Phase 4) —
+//     real federal tax: RMDs forced by the birth-year SECURE 2.0 rule, capital-gains tax on
+//     taxable-account withdrawals, and gross-up (withdraw more than the spending need to net the
+//     target amount after tax). Tax is OPT-IN: omit filingStatus/taxTables and the decumulation
+//     math is identical to Phase 3 (gross dollar pulls, no tax) — this keeps every Phase 2/3
+//     golden-number test valid unchanged.
 // project() composes both, given accumulation-phase and decumulation-phase settings.
 //
 // Pure and deterministic: no DOM, no I/O, no personal data. Every rate/amount is pulled through
@@ -18,6 +21,7 @@
 // See the design doc §4.1a for the full writeup.
 
 import { resolve } from './resolver.js';
+import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, requiredBeginningAge, rmdAmount } from './tax.js';
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
@@ -124,69 +128,189 @@ export function projectAccumulation(p) {
 //   taxDeferred — will be ordinary income whenever taxed; spent ahead of the tax-free buckets.
 //   hsa       — reserved for medical; drawn after the taxable/deferred buckets, before Roth.
 //   roth      — tax-free growth forever: the most valuable dollar to leave compounding, spent last.
-// No tax is actually computed in this (pre-tax) phase — this order only decides which account's
-// balance is drawn down first. Phase 4/6 add real tax consequences and a bracket-aware order.
 const CONVENTIONAL_ORDER = ['cash', 'taxable', 'taxDeferred', 'hsa', 'roth'];
 
 /**
- * Decide how much to pull from each account to cover `gap` (a non-negative nominal $ amount),
- * given each account's current balance. Never overdraws an account; reports any shortfall.
- * @param {number} gap
+ * Decide how much to pull from each account to cover `target` (a non-negative nominal $ amount),
+ * given each account's current balance. `floors` (optional) are mandatory minimum withdrawals
+ * per account — e.g. an RMD — taken first regardless of sequencing order; sequencing then covers
+ * whatever's left of `target` beyond the floors' total. If the floors alone exceed `target` (a
+ * forced RMD bigger than what's needed), the actual total withdrawn legitimately EXCEEDS target —
+ * that's not a bug, it's the caller's cue to reinvest the surplus (see solveTaxYear).
+ * @param {number} target
  * @param {{id:string, balance:number, taxStatus:string}[]} accounts
  * @param {'conventional'|'proportional'} sequencing
- * @returns {{withdrawals:Record<string,number>, shortfall:number}}
+ * @param {Record<string,number>} [floors]
+ * @returns {{withdrawals:Record<string,number>, totalWithdrawn:number, shortfall:number}}
  */
-function sequenceWithdrawal(gap, accounts, sequencing) {
+function sequenceWithdrawal(target, accounts, sequencing, floors = {}) {
   const withdrawals = Object.fromEntries(accounts.map((a) => [a.id, 0]));
-  if (gap <= 0) return { withdrawals, shortfall: 0 };
-
-  const total = accounts.reduce((s, a) => s + Math.max(0, a.balance), 0);
-  if (total <= 0) return { withdrawals, shortfall: gap };
-
-  if (sequencing === 'proportional') {
-    // share_i = gap * balance_i/total <= balance_i whenever gap <= total, so a single pass is
-    // exact and never overdraws — no capping/redistribution needed except at full depletion.
-    if (gap >= total) {
-      for (const a of accounts) withdrawals[a.id] = Math.max(0, a.balance);
-      return { withdrawals, shortfall: gap - total };
-    }
-    for (const a of accounts) withdrawals[a.id] = gap * (Math.max(0, a.balance) / total);
-    return { withdrawals, shortfall: 0 };
-  }
-
-  // conventional: drain accounts in CONVENTIONAL_ORDER, then any taxStatus not in that list.
-  const byStatus = new Map();
+  const remainingBalance = {};
+  let floorsTotal = 0;
   for (const a of accounts) {
-    if (!byStatus.has(a.taxStatus)) byStatus.set(a.taxStatus, []);
-    byStatus.get(a.taxStatus).push(a);
+    const floor = Math.min(Math.max(0, a.balance), Math.max(0, floors[a.id] || 0));
+    withdrawals[a.id] = floor;
+    remainingBalance[a.id] = Math.max(0, a.balance) - floor;
+    floorsTotal += floor;
   }
-  const order = [...CONVENTIONAL_ORDER, ...[...byStatus.keys()].filter((s) => !CONVENTIONAL_ORDER.includes(s))];
-  let remaining = gap;
-  for (const status of order) {
-    for (const a of byStatus.get(status) || []) {
-      if (remaining <= 0) break;
-      const take = Math.min(Math.max(0, a.balance), remaining);
-      withdrawals[a.id] = take;
-      remaining -= take;
+
+  const extraTarget = Math.max(0, target - floorsTotal);
+  if (extraTarget > 0) {
+    const total = accounts.reduce((s, a) => s + remainingBalance[a.id], 0);
+    if (total > 0) {
+      if (sequencing === 'proportional') {
+        // share_i = extra * remaining_i/total <= remaining_i whenever extra <= total.
+        if (extraTarget >= total) {
+          for (const a of accounts) withdrawals[a.id] += remainingBalance[a.id];
+        } else {
+          for (const a of accounts) withdrawals[a.id] += extraTarget * (remainingBalance[a.id] / total);
+        }
+      } else {
+        const byStatus = new Map();
+        for (const a of accounts) {
+          if (!byStatus.has(a.taxStatus)) byStatus.set(a.taxStatus, []);
+          byStatus.get(a.taxStatus).push(a);
+        }
+        const order = [...CONVENTIONAL_ORDER, ...[...byStatus.keys()].filter((s) => !CONVENTIONAL_ORDER.includes(s))];
+        let remaining = extraTarget;
+        for (const status of order) {
+          for (const a of byStatus.get(status) || []) {
+            if (remaining <= 0) break;
+            const take = Math.min(remainingBalance[a.id], remaining);
+            withdrawals[a.id] += take;
+            remaining -= take;
+          }
+          if (remaining <= 0) break;
+        }
+      }
     }
-    if (remaining <= 0) break;
   }
-  return { withdrawals, shortfall: Math.max(0, remaining) };
+
+  const totalWithdrawn = Object.values(withdrawals).reduce((s, v) => s + v, 0);
+  return { withdrawals, totalWithdrawn, shortfall: Math.max(0, target - totalWithdrawn) };
+}
+
+// Where surplus net-of-tax proceeds go when a forced RMD exceeds the year's spending need (design
+// doc §5/§8): prefer a taxable account (realistic — "just reinvest it"), then cash, then Roth,
+// then HSA. If none of those exist (100% tax-deferred portfolio, a real but rare edge case), fall
+// back to redepositing in the RMD's own source account — not strictly how RMDs work in reality
+// (you can't un-RMD), but conserves the modeled wealth rather than fabricating or destroying it.
+const REINVEST_PREFERENCE = ['taxable', 'cash', 'roth', 'hsa'];
+function pickReinvestmentTarget(accounts, fallbackId) {
+  for (const status of REINVEST_PREFERENCE) {
+    const a = accounts.find((x) => x.taxStatus === status);
+    if (a) return a.id;
+  }
+  return fallbackId;
+}
+
+/**
+ * One year's tax-aware withdrawal solve: forces RMDs, iteratively grosses up the withdrawal so
+ * the NET (after federal ordinary + capital-gains + flat state tax) matches `targetNet`, and
+ * reinvests any RMD-forced surplus. Pure — no mutation of inputs.
+ *
+ * Gross-up is a fixed-point iteration (design doc §4.2: "the engine solves for the gross
+ * amount"): each round, sequence a candidate gross total, compute the resulting tax from what
+ * actually got withdrawn, and adjust the candidate by the shortfall/surplus. Converges in a
+ * handful of rounds because tax is monotonic and piecewise-linear with slope < 1 (no marginal
+ * rate reaches 100%); it also terminates cleanly, without special-casing, when withdrawals are
+ * pinned by either the portfolio's total balance (real shortfall) or by RMD floors alone
+ * exceeding the target (surplus) — in both cases totalWithdrawn stops moving between rounds, so
+ * further iteration is a harmless no-op, not a bug.
+ *
+ * @param {object} p
+ * @param {number} p.targetNet   desired NET (after-tax) dollars to fund from the portfolio
+ * @param {{id:string, balance:number, taxStatus:string, basisFraction?:number}[]} p.accounts
+ * @param {'conventional'|'proportional'} p.sequencing
+ * @param {Record<string,number>} p.rmdFloors
+ * @param {'mfj'|'single'|'hoh'} p.filingStatus
+ * @param {number} p.age65Count
+ * @param {object} p.yearTable   resolved via tax.resolveYearTable
+ * @param {number} [p.stateTaxRate] flat rate on (ordinary taxable income + capital gain); default 0
+ * @returns {{withdrawals:Record<string,number>, reinvestment:Record<string,number>, totalWithdrawn:number, tax:number, ordinaryTaxableIncome:number, capitalGain:number, netAchieved:number, shortfall:number}}
+ */
+function solveTaxYear(p) {
+  const { accounts, sequencing, rmdFloors, filingStatus, yearTable } = p;
+  const stateTaxRate = num(p.stateTaxRate);
+  const stdDeduction = standardDeduction({ filingStatus, age65Count: p.age65Count, yearTable });
+  const totalAvailable = accounts.reduce((s, a) => s + Math.max(0, a.balance), 0);
+
+  const taxFor = (withdrawals) => {
+    let ordinaryWithdrawn = 0;
+    let gain = 0;
+    for (const a of accounts) {
+      const w = withdrawals[a.id] || 0;
+      if (a.taxStatus === 'taxDeferred') ordinaryWithdrawn += w;
+      else if (a.taxStatus === 'taxable') gain += w * (1 - (a.basisFraction ?? 0));
+    }
+    const ordinaryTaxableIncome = Math.max(0, ordinaryWithdrawn - stdDeduction);
+    const fedOrdinary = ordinaryTax(ordinaryTaxableIncome, filingStatus, yearTable);
+    const fedCapGains = capitalGainsTax(gain, ordinaryTaxableIncome, filingStatus, yearTable);
+    const stateTax = stateTaxRate * (ordinaryTaxableIncome + gain);
+    return { ordinaryTaxableIncome, gain, tax: fedOrdinary + fedCapGains + stateTax };
+  };
+
+  let grossGuess = Math.max(0, p.targetNet);
+  let last = null;
+  let lastTotalWithdrawn = -1;
+  for (let i = 0; i < 8; i++) {
+    const { withdrawals, totalWithdrawn } = sequenceWithdrawal(grossGuess, accounts, sequencing, rmdFloors);
+    const { ordinaryTaxableIncome, gain, tax } = taxFor(withdrawals);
+    const netAchieved = totalWithdrawn - tax;
+    last = { withdrawals, totalWithdrawn, tax, ordinaryTaxableIncome, gain, netAchieved };
+    if (totalWithdrawn >= totalAvailable - 1e-6) break;           // portfolio exhausted
+    if (totalWithdrawn === lastTotalWithdrawn) break;              // pinned by floors; no further movement possible
+    if (Math.abs(netAchieved - p.targetNet) < 0.01) break;         // converged
+    lastTotalWithdrawn = totalWithdrawn;
+    grossGuess = Math.max(0, grossGuess + (p.targetNet - netAchieved));
+  }
+
+  const surplus = Math.max(0, last.netAchieved - p.targetNet);
+  const reinvestment = Object.fromEntries(accounts.map((a) => [a.id, 0]));
+  if (surplus > 1e-9) {
+    const rmdSourceId = Object.keys(rmdFloors).find((id) => rmdFloors[id] > 0);
+    const targetId = pickReinvestmentTarget(accounts, rmdSourceId ?? accounts[0]?.id);
+    if (targetId) reinvestment[targetId] = surplus;
+  }
+
+  return {
+    withdrawals: last.withdrawals,
+    reinvestment,
+    totalWithdrawn: last.totalWithdrawn,
+    tax: last.tax,
+    ordinaryTaxableIncome: last.ordinaryTaxableIncome,
+    capitalGain: last.gain,
+    netAchieved: last.netAchieved,
+    shortfall: Math.max(0, p.targetNet - last.netAchieved),
+  };
 }
 
 /**
  * Project account balances through the decumulation (retirement) years: spending need, a
- * withdrawal strategy, tax-status-aware sequencing, and portfolio-survival tracking. PRE-TAX —
- * withdrawals are gross dollar pulls; no tax is computed and no RMDs are forced (Phase 4/6).
+ * withdrawal strategy, tax-status-aware sequencing, and portfolio-survival tracking.
  *
- * Model (per year):
+ * PRE-TAX by default (Phase 3 behavior, unchanged): omit `filingStatus`/`taxTables` and
+ * withdrawals are gross dollar pulls with no tax and no RMDs.
+ *
+ * TAX-AWARE (Phase 4) when `filingStatus` + `taxTables` + `anchorYear` are supplied: RMDs are
+ * forced once age >= the SECURE 2.0 birth-year threshold (needs `birthYear`); withdrawals from
+ * tax-deferred accounts are ordinary income and from taxable accounts trigger capital-gains tax
+ * on the gain portion (`account.basisFraction`, 0-1 — the fraction of a withdrawal that is
+ * already-taxed basis, not gain; missing/undefined ⇒ 0, i.e. the whole withdrawal is treated as
+ * gain — the conservative default when basis isn't known); Roth/HSA/cash stay
+ * tax-free (v1 simplification: HSA's non-medical penalty and Roth's early-withdrawal rules are
+ * not modeled — see the design doc for the full list of Phase-4 simplifications). Withdrawals
+ * gross-up so the NET matches the spending need; an RMD-forced surplus is reinvested rather than
+ * lost. `otherIncome` (pension/rental placeholder) is NOT taxed in Phase 4 — Social Security's
+ * own taxation (tax.taxableSocialSecurity) wires in when Phase 5 adds a real benefit amount.
+ *
+ * Model (per year, pre-tax path):
  *   desired (nominal) = strategy==='fixedPercent' ? startOfYearTotal * withdrawalPercent
  *                                                  : resolve(spending) * cumulativeInflation
- *   otherIncome (nominal) = resolve(otherIncome) * cumulativeInflation   (pension/rental/etc.;
- *                                                  Social Security composes in here, Phase 5)
+ *   otherIncome (nominal) = resolve(otherIncome) * cumulativeInflation
  *   gap        = max(0, desired - otherIncome)
  *   {withdrawals, shortfall} = sequenceWithdrawal(gap, accounts, sequencing)
- *   remainder  = startBalance - withdrawal   (withdrawal happens at the START of the year)
+ *   remainder  = startBalance - withdrawal + reinvestment   (withdrawal at the START of the year)
  *   growth     = remainder * returnRate
  *   endBalance = remainder + growth
  * A shortfall (gap the portfolio couldn't cover) marks that year as depleted; balances never go
@@ -195,7 +319,7 @@ function sequenceWithdrawal(gap, accounts, sequencing) {
  * @param {object} p
  * @param {number} p.startYear   first withdrawal year (typically retirementYear + 1)
  * @param {number} p.endYear     last year of the plan (horizon); inclusive, >= startYear
- * @param {{id:string, balance:number, taxStatus:string}[]} p.accounts
+ * @param {{id:string, balance:number, taxStatus:string, basisFraction?:number}[]} p.accounts
  * @param {object} p.returnRate  setting (per account/year)
  * @param {object} [p.inflation] setting (per year); default 0
  * @param {object} [p.spending]  setting, today's-dollars annual target (per year); default 0
@@ -206,6 +330,13 @@ function sequenceWithdrawal(gap, accounts, sequencing) {
  * @param {number} [p.startCumulativeInflation] cumulative inflation already elapsed before
  *   startYear (carried over from accumulation so today's-dollars stays relative to one base
  *   year across the whole plan); default 1
+ * @param {'mfj'|'single'|'hoh'} [p.filingStatus] presence (with taxTables) enables tax-aware mode
+ * @param {object} [p.taxTables]  parsed tax-tables.json
+ * @param {number} [p.anchorYear] required if taxTables given — see tax.resolveYearTable
+ * @param {object} [p.bracketIndexingRate] setting (per year); default 0
+ * @param {object} [p.standardDeductionIndexingRate] setting (per year); default 0
+ * @param {number} [p.stateTaxRate] flat rate; default 0 (e.g. TN)
+ * @param {number} [p.birthYear] enables RMD forcing + the standard deduction's age-65 addition
  * @returns {{startYear:number, endYear:number, years:object[], firstDepletionYear:number|null}}
  */
 export function projectDecumulation(p) {
@@ -226,10 +357,15 @@ export function projectDecumulation(p) {
   const withdrawalPercent = p.withdrawalPercent ?? { default: 0.04 };
   const strategy = p.strategy ?? 'fixedReal';
   const sequencing = p.sequencing ?? 'conventional';
+  const taxMode = !!(p.filingStatus && p.taxTables);
+  if (taxMode && !Number.isInteger(p.anchorYear)) {
+    throw new Error('projectDecumulation: anchorYear is required when taxTables is provided');
+  }
 
   const bal = {};
   const taxStatus = {};
-  for (const a of accounts) { bal[a.id] = num(a.balance); taxStatus[a.id] = a.taxStatus; }
+  const basisFraction = {};
+  for (const a of accounts) { bal[a.id] = num(a.balance); taxStatus[a.id] = a.taxStatus; basisFraction[a.id] = a.basisFraction; }
 
   const years = [];
   let cumInflation = num(p.startCumulativeInflation) || 1;
@@ -245,25 +381,58 @@ export function projectDecumulation(p) {
     const otherIncomeNominal = num(resolve(otherIncome, { year })) * cumInflation;
     const gap = Math.max(0, desired - otherIncomeNominal);
 
-    const seqAccounts = accounts.map((a) => ({ id: a.id, balance: bal[a.id], taxStatus: taxStatus[a.id] }));
-    const { withdrawals, shortfall } = sequenceWithdrawal(gap, seqAccounts, sequencing);
+    const seqAccounts = accounts.map((a) => ({ id: a.id, balance: bal[a.id], taxStatus: taxStatus[a.id], basisFraction: basisFraction[a.id] }));
+
+    let withdrawals, reinvestment, shortfall, tax = 0, ordinaryTaxableIncome = 0, capitalGain = 0;
+    if (taxMode) {
+      const age = Number.isInteger(p.birthYear) ? year - p.birthYear : null;
+      const rmdFloors = {};
+      if (age != null) {
+        const rbAge = requiredBeginningAge(p.birthYear, p.taxTables.rmd);
+        if (age >= rbAge) {
+          for (const a of seqAccounts) {
+            if (a.taxStatus === 'taxDeferred') rmdFloors[a.id] = rmdAmount(age, a.balance, p.taxTables.rmd);
+          }
+        }
+      }
+      const yearTable = resolveYearTable({
+        tables: p.taxTables, year, anchorYear: p.anchorYear,
+        bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,
+      });
+      const solved = solveTaxYear({
+        targetNet: gap, accounts: seqAccounts, sequencing, rmdFloors,
+        filingStatus: p.filingStatus, age65Count: age != null && age >= 65 ? 1 : 0,
+        yearTable, stateTaxRate: p.stateTaxRate,
+      });
+      withdrawals = solved.withdrawals; reinvestment = solved.reinvestment; shortfall = solved.shortfall;
+      tax = solved.tax; ordinaryTaxableIncome = solved.ordinaryTaxableIncome; capitalGain = solved.capitalGain;
+    } else {
+      const seq = sequenceWithdrawal(gap, seqAccounts, sequencing);
+      withdrawals = seq.withdrawals; shortfall = seq.shortfall;
+      reinvestment = Object.fromEntries(accounts.map((a) => [a.id, 0]));
+    }
 
     const acc = {};
     for (const a of accounts) {
       const startBalance = bal[a.id];
       const withdrawal = withdrawals[a.id];
-      const remainder = startBalance - withdrawal;
+      const reinvest = reinvestment[a.id] || 0;
+      const remainder = startBalance - withdrawal + reinvest;
       const r = num(resolve(returnRate, { accountId: a.id, year }));
       const growth = remainder * r;
       const endBalance = remainder + growth;
       bal[a.id] = endBalance;
-      acc[a.id] = { startBalance, withdrawal, growth, endBalance };
+      acc[a.id] = { startBalance, withdrawal, reinvestment: reinvest, growth, endBalance };
     }
-    const totals = rowTotals(acc, ['withdrawal']);
+    const totals = rowTotals(acc, ['withdrawal', 'reinvestment']);
     totals.spendingNeed = desired;
     totals.otherIncome = otherIncomeNominal;
     totals.gap = gap;
     totals.shortfall = shortfall;
+    totals.tax = tax;
+    totals.ordinaryTaxableIncome = ordinaryTaxableIncome;
+    totals.capitalGain = capitalGain;
+    totals.netSpendable = otherIncomeNominal + (totals.withdrawal - tax - totals.reinvestment);
 
     if (shortfall > 1e-9 && firstDepletionYear === null) firstDepletionYear = year;
 
@@ -279,6 +448,8 @@ export function projectDecumulation(p) {
         otherIncome: totals.otherIncome / cumInflation,
         withdrawal: totals.withdrawal / cumInflation,
         shortfall: totals.shortfall / cumInflation,
+        tax: totals.tax / cumInflation,
+        netSpendable: totals.netSpendable / cumInflation,
       },
     });
   }
@@ -292,11 +463,15 @@ export function projectDecumulation(p) {
  * begins the following year. Balances and cumulative inflation carry over continuously across
  * the boundary — the resulting `years` is one unbroken series, each row tagged with its phase.
  *
+ * Cost basis (`accounts[].costBasis`, taxable accounts only) is captured as a FRACTION of the
+ * account's starting balance and held constant through growth (design doc §4/§8's v1
+ * simplification — contributions during accumulation aren't tracked as additional basis).
+ *
  * @param {object} p
  * @param {number} p.baseYear
  * @param {number} p.retirementYear   >= baseYear
  * @param {number} p.horizonYear      >= retirementYear
- * @param {{id:string, balance:number, taxStatus:string}[]} p.accounts
+ * @param {{id:string, balance:number, taxStatus:string, costBasis?:number}[]} p.accounts
  * @param {object} p.returnRate       setting, used in both phases
  * @param {object} [p.inflation]      setting, used in both phases
  * @param {object} [p.contributions]  accumulation only
@@ -306,6 +481,13 @@ export function projectDecumulation(p) {
  * @param {object} [p.withdrawalPercent] decumulation only
  * @param {'fixedReal'|'fixedPercent'} [p.strategy] decumulation only
  * @param {'conventional'|'proportional'} [p.sequencing] decumulation only
+ * @param {'mfj'|'single'|'hoh'} [p.filingStatus] enables Phase 4 tax-aware decumulation
+ * @param {object} [p.taxTables] parsed tax-tables.json
+ * @param {number} [p.anchorYear] required if taxTables given
+ * @param {object} [p.bracketIndexingRate] setting; default 0
+ * @param {object} [p.standardDeductionIndexingRate] setting; default 0
+ * @param {number} [p.stateTaxRate] default 0
+ * @param {number} [p.birthYear] enables RMDs + age-65 standard deduction
  * @returns {{baseYear:number, retirementYear:number, horizonYear:number, years:object[], firstDepletionYear:number|null}}
  */
 export function project(p) {
@@ -326,6 +508,13 @@ export function project(p) {
   if (horizonYear > retirementYear) {
     const decStartAccounts = accounts.map((a) => ({
       id: a.id, taxStatus: a.taxStatus, balance: lastAccRow.accounts[a.id].endBalance,
+      // Conservative default (0 = treat as entirely gain) whenever basis can't be determined —
+      // matches solveTaxYear's `basisFraction ?? 0` fallback for a missing costBasis, and also
+      // covers a taxable account with $0 starting balance (any value it has by decumulation came
+      // entirely from untracked growth/contributions, not known original basis).
+      basisFraction: a.taxStatus === 'taxable'
+        ? (a.balance > 0 ? Math.min(1, Math.max(0, num(a.costBasis) / a.balance)) : 0)
+        : undefined,
     }));
     const dec = projectDecumulation({
       startYear: retirementYear + 1, endYear: horizonYear, accounts: decStartAccounts,
@@ -333,6 +522,9 @@ export function project(p) {
       spending: p.spending, otherIncome: p.otherIncome, withdrawalPercent: p.withdrawalPercent,
       strategy: p.strategy, sequencing: p.sequencing,
       startCumulativeInflation: lastAccRow.cumulativeInflation,
+      filingStatus: p.filingStatus, taxTables: p.taxTables, anchorYear: p.anchorYear,
+      bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,
+      stateTaxRate: p.stateTaxRate, birthYear: p.birthYear,
     });
     decYears = dec.years;
     firstDepletionYear = dec.firstDepletionYear;

@@ -160,6 +160,8 @@ function buildChart(result) {
     if (r.phase === 'accumulation' && r.totals.contribution) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.contribution)} contributed`));
     if (r.phase === 'decumulation') {
       lines.push(h('div', { class: 'tip-sub' }, `− ${usdFull(r.totals.withdrawal)} withdrawn`));
+      if (r.totals.tax) lines.push(h('div', { class: 'tip-sub' }, `− ${usdFull(r.totals.tax)} tax → ${usdFull(r.totals.netSpendable)} net`));
+      if (r.totals.reinvestment) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.reinvestment)} RMD surplus reinvested`));
       if (r.totals.shortfall > 1e-6) lines.push(h('div', { class: 'tip-sub', style: { color: COL.critical } }, `Shortfall: ${usdFull(r.totals.shortfall)}`));
     }
     tip.append(...lines);
@@ -183,16 +185,22 @@ function buildChart(result) {
 
 function buildTable(result) {
   const rows = result.years;
+  const hasTax = rows.some((r) => r.totals.tax);
   const table = h('table', { class: 'proj-table' },
     h('thead', {}, h('tr', {},
       h('th', {}, 'Year'), h('th', {}, 'Phase'), h('th', { class: 'r' }, 'Contribution'),
-      h('th', { class: 'r' }, 'Withdrawal'), h('th', { class: 'r' }, 'Growth'),
+      h('th', { class: 'r' }, 'Withdrawal'),
+      hasTax ? h('th', { class: 'r' }, 'Tax') : null,
+      hasTax ? h('th', { class: 'r' }, 'Net spendable') : null,
+      h('th', { class: 'r' }, 'Growth'),
       h('th', { class: 'r' }, 'Balance (nominal)'), h('th', { class: 'r' }, "Balance (today's)"))),
     h('tbody', {}, ...rows.map((r) => h('tr', {},
       h('td', {}, r.year),
       h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       h('td', { class: 'r' }, r.totals.contribution ? usdFull(r.totals.contribution) : '—'),
       h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(r.totals.withdrawal) : '—'),
+      hasTax ? h('td', { class: 'r' }, r.totals.tax ? usdFull(r.totals.tax) : '—') : null,
+      hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(r.totals.netSpendable) : '—') : null,
       h('td', { class: 'r' }, usdFull(r.totals.growth)),
       h('td', { class: 'r' }, usdFull(r.totals.endBalance)),
       h('td', { class: 'r' }, usdFull(r.real.endBalance)),
@@ -214,6 +222,7 @@ export function createProjectionView() {
     const retRow = r.years.find((y) => y.year === r.retirementYear) || r.years[0];
     const endRow = r.years[r.years.length - 1];
     const contributed = r.years.reduce((sn, y) => sn + (y.totals.contribution || 0), 0);
+    const lifetimeTax = r.years.reduce((sn, y) => sn + (y.totals.tax || 0), 0);
     const growth = retRow.totals.endBalance - startTotal - contributed;
     const yrs = r.retirementYear - r.baseYear;
 
@@ -223,6 +232,7 @@ export function createProjectionView() {
         statTile("At retirement · today's dollars", usd(retRow.real.endBalance), `${r.retirementYear} · in ${yrs} yr${yrs === 1 ? '' : 's'}`, COL.real),
         statTile('Total contributed', usd(contributed), 'over the accumulation years'),
         statTile("End of plan · today's dollars", usd(endRow.real.endBalance), `${r.horizonYear}`, endRow.real.endBalance > 0 ? COL.real : COL.critical),
+        lifetimeTax > 0 ? statTile('Lifetime tax in retirement', usd(lifetimeTax), 'nominal, federal + state') : null,
       ),
       buildChart(r),
       h('div', { class: 'table-toggle' },

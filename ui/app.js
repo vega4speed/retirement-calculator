@@ -1,8 +1,8 @@
-// app.js — app shell. Enter accounts into a snapshot, set accumulation assumptions (return,
-// contributions, inflation, wage growth) and decumulation assumptions (spending or a withdrawal
-// %, other income, sequencing) via the Simple/Expand controls, pick retirement/horizon years,
-// and see the full year-by-year projection (chart + table) in today's dollars, including
-// whether the portfolio lasts.
+// app.js — app shell. Enter accounts into a snapshot, set filing/tax basics, accumulation
+// assumptions (return, contributions, inflation, wage growth), and decumulation assumptions
+// (spending or a withdrawal %, other income, sequencing) via the Simple/Expand controls, pick
+// retirement/horizon years, and see the full year-by-year projection (chart + table) in today's
+// dollars — including real federal tax (RMDs, capital gains, gross-up) and whether it lasts.
 //
 // Persistence is client-only so this can be HOSTED (e.g. GitHub Pages) with no personal data
 // leaving the browser: state auto-saves to localStorage; Export/Import is for backups. Nothing
@@ -16,6 +16,10 @@ import { project } from '../engine/project.js';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const STORAGE_KEY = 'retirement-calc:v1';
+// Latest verified year in data/tax-tables.json (see that file's `_meta.verificationStatus`).
+// Brackets/standard-deduction for any other year are projected from this anchor by the
+// bracketIndexingRate/standardDeductionIndexingRate settings (engine/tax.js resolveYearTable).
+const TAX_ANCHOR_YEAR = 2026;
 
 const EXAMPLE_ACCOUNTS = [
   { id: 'ex-401k', label: 'Example 401(k)', ownerId: 'me', taxStatus: 'taxDeferred', balance: 100000 },
@@ -33,9 +37,20 @@ const defaultAssumptions = () => ({
   spending: { default: 40000 },
   otherIncome: { default: 0 },
   withdrawalPercent: { default: 0.04 },
+  stateTaxRate: { default: 0 }, // default TN: no state income tax
 });
 
-export function mount(root) {
+const defaultFiling = () => ({
+  filingStatus: 'single',
+  birthYear: new Date().getFullYear() - 45,
+});
+
+export async function mount(root) {
+  // Tax tables are fetched at runtime (not bundled) so the plain JSON file stays the single
+  // source of truth; if it can't be loaded (e.g. opened via file:// instead of a server), tax
+  // computation degrades gracefully to Phase 3's pre-tax mode rather than breaking the app.
+  const taxTables = await fetch('./data/tax-tables.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+
   // --- state ---------------------------------------------------------------
   const snapshot = {
     id: `snapshot-${todayISO()}`,
@@ -45,6 +60,7 @@ export function mount(root) {
     accounts: [],
   };
   let assumptions = defaultAssumptions();
+  let filing = defaultFiling();
   const baseYear = () => parseInt(String(snapshot.asOf).slice(0, 4), 10) || new Date().getFullYear();
   const plan = {
     retirementYear: baseYear() + 25,
@@ -59,7 +75,7 @@ export function mount(root) {
 
   // --- persistence (localStorage only) -------------------------------------
   function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ snapshot, assumptions, plan })); } catch { /* disabled */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ snapshot, assumptions, plan, filing })); } catch { /* disabled */ }
   }
   function loadPersisted() {
     try {
@@ -70,12 +86,14 @@ export function mount(root) {
       if (data.assumptions && typeof data.assumptions === 'object') assumptions = { ...defaultAssumptions(), ...data.assumptions };
       if (data.plan && typeof data.plan === 'object') Object.assign(plan, data.plan);
       else if (data.retirement && Number.isFinite(data.retirement.year)) plan.retirementYear = data.retirement.year; // migrate v1 shape
+      if (data.filing && typeof data.filing === 'object') filing = { ...defaultFiling(), ...data.filing };
     } catch { /* ignore corrupt state */ }
   }
   function clearSaved() {
     try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     snapshot.accounts.length = 0;
     assumptions = defaultAssumptions();
+    filing = defaultFiling();
     plan.retirementYear = baseYear() + 25;
     plan.horizonYear = baseYear() + 55;
     plan.strategy = 'fixedReal';
@@ -98,7 +116,10 @@ export function mount(root) {
 
   // --- projection ----------------------------------------------------------
   function computeProjection() {
-    const accounts = snapshot.accounts.map((a) => ({ id: a.id, balance: Number(a.balance) || 0, taxStatus: a.taxStatus }));
+    const accounts = snapshot.accounts.map((a) => ({
+      id: a.id, balance: Number(a.balance) || 0, taxStatus: a.taxStatus,
+      costBasis: a.costBasis != null ? Number(a.costBasis) : undefined,
+    }));
     if (!accounts.length) return null;
     const startYear = baseYear();
     const retirementYear = Math.max(startYear, Math.round(plan.retirementYear) || startYear);
@@ -114,6 +135,16 @@ export function mount(root) {
       withdrawalPercent: assumptions.withdrawalPercent,
       strategy: plan.strategy,
       sequencing: plan.sequencing,
+      // Tax is opt-in (engine/project.js): only passed through when the tables actually loaded.
+      // Bracket/standard-deduction indexing reuses the `inflation` assumption — a defensible
+      // default ("brackets roughly keep pace with prices"); a dedicated knob is a later refinement.
+      ...(taxTables ? {
+        filingStatus: filing.filingStatus,
+        birthYear: Number.isFinite(filing.birthYear) ? filing.birthYear : undefined,
+        taxTables, anchorYear: TAX_ANCHOR_YEAR,
+        bracketIndexingRate: assumptions.inflation, standardDeductionIndexingRate: assumptions.inflation,
+        stateTaxRate: assumptions.stateTaxRate,
+      } : {}),
     });
   }
   function refreshProjection() {
@@ -185,6 +216,23 @@ export function mount(root) {
     return h('div', { class: 'setting' }, h('div', { class: 'setting-head' }, h('label', { class: 'setting-label' }, label), h('span', { class: 'field' }, input), hint));
   }
 
+  function birthYearRow() {
+    const hint = h('span', { class: 'muted small' });
+    const setHint = () => { hint.textContent = `age ${baseYear() - filing.birthYear} in ${baseYear()}`; };
+    setHint();
+    const input = h('input', {
+      type: 'number', step: '1', value: filing.birthYear, class: 'num yr',
+      onchange: (e) => {
+        const v = parseInt(e.target.value, 10);
+        filing.birthYear = Number.isFinite(v) ? v : filing.birthYear;
+        e.target.value = filing.birthYear;
+        setHint(); onEdit();
+      },
+    });
+    return h('div', { class: 'setting' }, h('div', { class: 'setting-head' },
+      h('label', { class: 'setting-label' }, 'Birth year'), h('span', { class: 'field' }, input), hint));
+  }
+
   function selectRow(label, value, options, onSet) {
     const select = h('select', {
       onchange: (e) => { onSet(e.target.value); onEdit(); rebuild(); },
@@ -215,7 +263,17 @@ export function mount(root) {
           h('button', { class: 'ghost', onclick: () => { if (confirm('Clear all saved data in this browser?')) clearSaved(); } }, 'Clear'),
         ),
       ),
-      section('2 · Working years',
+      section('2 · Filing & taxes',
+        taxTables
+          ? h('p', { class: 'muted' }, `Federal tax is computed for real (brackets/standard deduction anchored to ${TAX_ANCHOR_YEAR}, indexed by the inflation assumption). Birth year drives RMDs and the age-65 standard-deduction bump.`)
+          : h('p', { class: 'muted', style: { color: '#b45309' } }, "Tax tables didn't load — projections are running pre-tax (gross withdrawals only). Serve this app over http(s), not a bare file:// open."),
+        selectRow('Filing status', filing.filingStatus, [
+          ['single', 'Single'], ['mfj', 'Married filing jointly'], ['hoh', 'Head of household'],
+        ], (v) => { filing.filingStatus = v; }),
+        birthYearRow(),
+        settingRow('stateTaxRate', 'State income tax rate (flat)', 'percent', false),
+      ),
+      section('3 · Working years',
         h('p', { class: 'muted' }, 'Set one value, or Expand any knob to override it per account and/or per year. Contributions are the base-year annual amount, escalated by wage growth.'),
         yearRow('Retirement year', () => plan.retirementYear, (v) => { plan.retirementYear = v; if (plan.horizonYear < v) plan.horizonYear = v; }, baseYear),
         settingRow('returnRate', 'Rate of return', 'percent', true),
@@ -223,8 +281,8 @@ export function mount(root) {
         settingRow('inflation', 'Inflation', 'percent', false),
         settingRow('wageGrowth', 'Wage growth', 'percent', false),
       ),
-      section('3 · Retirement spending',
-        h('p', { class: 'muted' }, "Pre-tax for now (Phase 4 adds real tax math): withdrawals are gross dollar pulls, drawn from your accounts in the order below. \"Does it last\" reflects spending vs. growth only."),
+      section('4 · Retirement spending',
+        h('p', { class: 'muted' }, 'Withdrawals are drawn from your accounts in the order below, grossed up to net your spending target after tax (Phase 4). RMDs are forced once you reach the required age.'),
         yearRow('Plan through year', () => plan.horizonYear, (v) => { plan.horizonYear = v; }, () => plan.retirementYear),
         selectRow('Withdrawal strategy', plan.strategy, [
           ['fixedReal', "Fixed spending target (today's $)"],
@@ -233,13 +291,13 @@ export function mount(root) {
         plan.strategy === 'fixedPercent'
           ? settingRow('withdrawalPercent', 'Withdrawal %', 'percent', false)
           : settingRow('spending', 'Annual spending (today’s $)', 'money', false),
-        settingRow('otherIncome', "Other income — pension/rental (today's $)", 'money', false),
+        settingRow('otherIncome', "Other income — pension/rental (today's $, not yet taxed — a v1 simplification)", 'money', false),
         selectRow('Withdrawal order', plan.sequencing, [
           ['conventional', 'Conventional (cash → taxable → tax-deferred → HSA → Roth)'],
           ['proportional', 'Proportional (spread across all accounts)'],
         ], (v) => { plan.sequencing = v; }),
       ),
-      section("4 · Projection (today's dollars)",
+      section("5 · Projection (today's dollars)",
         projectionView.el,
       ),
     );
