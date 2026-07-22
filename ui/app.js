@@ -74,7 +74,7 @@ export async function mount(root) {
   const plan = {
     retirementYear: baseYear() + 25,
     horizonYear: baseYear() + 55,
-    strategy: 'fixedReal',       // 'fixedReal' | 'fixedPercent'
+    strategy: 'fixedReal',       // 'fixedReal' | 'fixedPercent' | 'maxSustainable'
     sequencing: 'conventional',  // 'conventional' | 'proportional' | 'bracketFill'
     bracketFillRate: 0.12,       // 'bracketFill' only: which ordinary bracket to fill up to
   };
@@ -333,6 +333,23 @@ export async function mount(root) {
       (v) => { plan.bracketFillRate = Number(v); });
   }
 
+  // Live "here's what that produces" readout for the 'maxSustainable' strategy — no input to
+  // type, the amount is solved from every other assumption already set (design doc §9: "what's
+  // the safe real spending it does support?"). Recomputed on demand rather than cached, same
+  // pattern as socialSecurityEstimate() above; the solver is a few dozen project() calls, fast
+  // enough to run inline on every rebuild without a spinner.
+  function maxSustainableRow() {
+    const r = computeProjection();
+    if (!r) return h('p', { class: 'muted small' }, 'Add at least one account to solve for a sustainable spending level.');
+    if (r.solvedSpending == null) {
+      return h('p', { class: 'muted small' }, 'Set a "Plan through year" past retirement to solve for a sustainable spending level.');
+    }
+    return h('div', { class: 'ss-estimate' },
+      h('strong', {}, `Solved: $${Math.round(r.solvedSpending).toLocaleString()}/yr`),
+      ` — the highest constant spending (today's dollars) that lasts through ${r.horizonYear} under your current assumptions.`,
+    );
+  }
+
   function selectRow(label, value, options, onSet) {
     const select = h('select', {
       onchange: (e) => { onSet(e.target.value); onEdit(); rebuild(); },
@@ -393,10 +410,13 @@ export async function mount(root) {
         selectRow('Withdrawal strategy', plan.strategy, [
           ['fixedReal', "Fixed spending target (today's $)"],
           ['fixedPercent', '% of current balance each year'],
+          ['maxSustainable', 'Maximum sustainable (solves for the highest spending that lasts)'],
         ], (v) => { plan.strategy = v; }),
         plan.strategy === 'fixedPercent'
           ? settingRow('withdrawalPercent', 'Withdrawal %', 'percent', false)
-          : settingRow('spending', 'Annual spending (today’s $)', 'money', false),
+          : plan.strategy === 'maxSustainable'
+            ? maxSustainableRow()
+            : settingRow('spending', 'Annual spending (today’s $)', 'money', false),
         settingRow('otherIncome', "Other income — pension/rental (today's $, not yet taxed — a v1 simplification)", 'money', false),
         selectRow('Withdrawal order', plan.sequencing, [
           ['conventional', 'Conventional (cash → taxable → tax-deferred → HSA → Roth)'],

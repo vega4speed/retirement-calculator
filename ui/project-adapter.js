@@ -3,19 +3,18 @@
 // comparison view (scenarios.js, Phase 7) so a saved scenario and the live plan are ALWAYS
 // projected identically — no separate/divergent copy of this parameter-mapping logic.
 
-import { project } from '../engine/project.js';
+import { project, solveMaxSustainableSpending } from '../engine/project.js';
 
 // Latest verified year in data/tax-tables.json (see that file's `_meta.verificationStatus`).
 // Brackets/standard-deduction for any other year are projected from this anchor by the
 // bracketIndexingRate/standardDeductionIndexingRate settings (engine/tax.js resolveYearTable).
 export const TAX_ANCHOR_YEAR = 2026;
 
-/**
- * @param {{snapshot:object, assumptions:object, plan:object, filing:object, social:object}} state
- * @param {object|null} taxTables parsed tax-tables.json, or null if it failed to load
- * @returns {object|null} a project() result, or null if there are no accounts to project
- */
-export function projectFor(state, taxTables) {
+/** Builds the project()-shaped params object from the app's state shape, or null if there are
+ * no accounts to project. Shared by projectFor() and solveMaxSustainableSpendingFor() below so
+ * both stay in sync — one is a straight project() call, the other feeds the same params into the
+ * solver (which internally overrides strategy/spending; see engine/project.js's docs). */
+function paramsFor(state, taxTables) {
   const { snapshot, assumptions, plan, filing, social } = state;
   const accounts = snapshot.accounts.map((a) => ({
     id: a.id, balance: Number(a.balance) || 0, taxStatus: a.taxStatus,
@@ -25,7 +24,7 @@ export function projectFor(state, taxTables) {
   const startYear = parseInt(String(snapshot.asOf).slice(0, 4), 10) || new Date().getFullYear();
   const retirementYear = Math.max(startYear, Math.round(plan.retirementYear) || startYear);
   const horizonYear = Math.max(retirementYear, Math.round(plan.horizonYear) || retirementYear);
-  return project({
+  return {
     baseYear: startYear, retirementYear, horizonYear, accounts,
     returnRate: assumptions.returnRate,
     contributions: assumptions.contributions,
@@ -53,5 +52,24 @@ export function projectFor(state, taxTables) {
       colaRate: assumptions.colaRate,
       solvencyHaircutStartYear: social.solvencyHaircutStartYear, solvencyHaircutFactor: social.solvencyHaircutFactor,
     } : {}),
-  });
+  };
+}
+
+/**
+ * @param {{snapshot:object, assumptions:object, plan:object, filing:object, social:object}} state
+ * @param {object|null} taxTables parsed tax-tables.json, or null if it failed to load
+ * @returns {object|null} a project() result, or null if there are no accounts to project. When
+ *   `plan.strategy === 'maxSustainable'` this transparently runs solveMaxSustainableSpending()
+ *   instead of a plain project() call and stashes the solved amount as `result.solvedSpending`
+ *   (today's dollars) — every other consumer of this result (charts, tables, scenario
+ *   comparison) needs no special-casing, since the shape is otherwise identical to project()'s.
+ */
+export function projectFor(state, taxTables) {
+  const params = paramsFor(state, taxTables);
+  if (!params) return null;
+  if (state.plan.strategy === 'maxSustainable') {
+    const { spending, result } = solveMaxSustainableSpending(params);
+    return { ...result, solvedSpending: spending };
+  }
+  return project(params);
 }

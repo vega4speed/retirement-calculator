@@ -707,3 +707,53 @@ export function project(p) {
 
   return { baseYear, retirementYear, horizonYear, years, firstDepletionYear };
 }
+
+/**
+ * Binary-search the maximum constant real annual spending (today's dollars, 'fixedReal'
+ * strategy) the portfolio sustains through the full horizon — design doc §9's "what's the safe
+ * real spending it does support?" Holds every other input fixed and only varies `spending`;
+ * `p.strategy` and `p.spending` are both ignored/overridden (the solve wouldn't mean anything
+ * against a moving target). Feasibility is monotonic in spending — more nominal $ withdrawn per
+ * year can only hasten or cause depletion, never help it — so a binary search is valid: each
+ * round tests one candidate spend via a full project() call and narrows toward the boundary
+ * where the portfolio JUST lasts (ends at/near $0 by horizonYear rather than running dry early
+ * or leaving money unspent).
+ *
+ * @param {object} p same shape as project() (see its docs); `spending`/`strategy` ignored
+ * @param {object} [opts]
+ * @param {number} [opts.tolerance] dollars precision to stop narrowing at; default 1
+ * @param {number} [opts.maxIterations] binary-search round cap; default 60
+ * @returns {{spending: number|null, result: object}} `spending` is the solved today's-dollars
+ *   annual amount; null when there's no decumulation phase to solve for (horizonYear <=
+ *   retirementYear), in which case `result` is just project()'s own no-op-decumulation output.
+ */
+export function solveMaxSustainableSpending(p, opts = {}) {
+  const tolerance = opts.tolerance ?? 1;
+  const maxIterations = opts.maxIterations ?? 60;
+  const runAt = (spend) => project({ ...p, strategy: 'fixedReal', spending: { default: spend } });
+
+  const zeroResult = runAt(0);
+  if (zeroResult.horizonYear <= zeroResult.retirementYear) {
+    return { spending: null, result: zeroResult };
+  }
+
+  let lo = 0, loResult = zeroResult;
+  let hi = 1000;
+  let hiResult = runAt(hi);
+  let doublings = 0;
+  // Grow hi until it's genuinely infeasible (or we hit a sane cap) — starting hi=1000 could
+  // already be sustainable for a small portfolio, in which case doubling finds the real ceiling.
+  while (hiResult.firstDepletionYear == null && hi < 1e9 && doublings < 40) {
+    hi *= 2;
+    hiResult = runAt(hi);
+    doublings++;
+  }
+
+  for (let i = 0; i < maxIterations && hi - lo > tolerance; i++) {
+    const mid = (lo + hi) / 2;
+    const midResult = runAt(mid);
+    if (midResult.firstDepletionYear == null) { lo = mid; loResult = midResult; }
+    else hi = mid;
+  }
+  return { spending: lo, result: loResult };
+}

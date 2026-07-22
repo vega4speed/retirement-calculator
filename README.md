@@ -37,7 +37,9 @@ engine/             pure calculation modules (no DOM, no I/O) — unit-tested
   resolver.js         the override resolver (done + tested)
   tax.js               brackets / std ded / LTCG / SS taxation / RMDs (done + tested)
   project.js          accumulation + decumulation projection, tax-aware, incl. Social
-                       Security's income/taxation (done + tested)
+                       Security's income/taxation, plus solveMaxSustainableSpending() — a
+                       binary search for the highest constant spend the portfolio survives
+                       (done + tested)
   socialsecurity.js   earnings → AIME → PIA → claiming, COLA, solvency haircut (done + tested)
   strategies.js       superseded by project.js's built-in sequencing (now incl.
                        bracketFill, Phase 6); Roth conversions remain the natural
@@ -54,7 +56,8 @@ test/               node:test suites
 
 Done & tested: the override resolver, the accounts + Simple/Expand UI, the full **tax-aware
 accumulation + decumulation projection** — growth and contributions to retirement, then spending,
-a withdrawal strategy (fixed target or % of balance), tax-status-aware account sequencing, RMDs
+a withdrawal strategy (fixed target, % of balance, or **maximum sustainable** — see below),
+tax-status-aware account sequencing, RMDs
 (forced by the SECURE 2.0 birth-year rule), federal ordinary-income and capital-gains tax with
 gross-up (withdrawals are increased so the *net* after tax hits your spending target) — and now
 **Social Security**: the benefit is *estimated from your earnings*, not typed in as a fixed
@@ -78,13 +81,20 @@ income across more years). There's a lifetime version of that same rate as a sta
 comparing strategies at a glance. The view preserves your scroll position (both the page's and
 the table's own internal scroll) across these interactions instead of jumping to the top.
 
+**Maximum sustainable spending.** A third withdrawal strategy alongside "fixed target" and "% of
+balance": instead of typing an annual spending number, solve for the highest constant real amount
+your portfolio actually survives through your full horizon — a binary search over the same
+projection engine, shown as a live "Solved: $X/yr" readout that updates as you change any other
+assumption.
+
 **Phase 7: scenario comparison.** Save the current accounts + assumptions as a named scenario —
 it's a frozen snapshot, so editing your live accounts or assumptions afterward never changes a
 scenario you already saved. Select 2–4 scenarios to compare side by side: a combined today's-
 dollars balance chart (each scenario keeps the same color for as long as it's part of a
 comparison, even as you check/uncheck others) and a headline-readout table — does the money last,
-ending balance, lifetime tax, lifetime effective tax rate, and the assumptions that actually
-differ between them. "Load" puts a saved scenario back into the live editor to keep tweaking it.
+ending balance, lifetime tax, lifetime effective tax rate, the solved maximum sustainable spend
+when that strategy was used, and the assumptions that actually differ between them. "Load" puts a
+saved scenario back into the live editor to keep tweaking it.
 
 In progress: Roth conversions (the natural extension of the bracket-fill machinery) and
 couple/spousal Social Security.

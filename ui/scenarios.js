@@ -25,7 +25,7 @@ const MAX_COMPARE = 4;
 const SERIES_PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100'];
 
 const SEQUENCING_LABEL = { conventional: 'Conventional', proportional: 'Proportional', bracketFill: 'Bracket-fill' };
-const STRATEGY_LABEL = { fixedReal: "Fixed spending (today's $)", fixedPercent: '% of balance' };
+const STRATEGY_LABEL = { fixedReal: "Fixed spending (today's $)", fixedPercent: '% of balance', maxSustainable: 'Maximum sustainable (solved)' };
 
 function loadScenarios() {
   try {
@@ -151,8 +151,11 @@ function buildComparisonTable(entries) {
       ? h('td', {}, h('span', { style: { color: COL.critical } }, `⚠ Runs out ${e.result.firstDepletionYear}`))
       : h('td', {}, h('span', { style: { color: COL.good } }, '✓ Lasts'));
   };
+  const anySolved = entries.some((e) => e.result.solvedSpending != null);
   const rowsSpec = [
     ['Portfolio', (e) => survivalCell(e)],
+    ...(anySolved ? [['Max sustainable spend · today\'s $', (e) =>
+      h('td', { class: 'r' }, e.result.solvedSpending != null ? usdFull(e.result.solvedSpending) : '—')]] : []),
     ["Ending balance · today's $", (e) => h('td', { class: 'r' }, usdFull(e.result.years[e.result.years.length - 1].real.endBalance))],
     ['Lifetime tax (nominal)', (e) => {
       const t = e.result.years.reduce((sn, y) => sn + (y.totals.tax || 0), 0);

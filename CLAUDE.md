@@ -37,6 +37,13 @@ engine/               pure calculation modules (unit-tested)
                          Each decumulation year's totals now also carry grossIncome and
                          effectiveTaxRate (tax ÷ gross income) — the number that actually shows
                          whether a strategy is tax-efficient, distinct from the marginal rate.
+                         solveMaxSustainableSpending(p) — binary-searches the maximum constant
+                         real annual spend ('fixedReal') the portfolio survives through the full
+                         horizon (design doc §9's "what's the safe spending it supports"); every
+                         other input held fixed, ~30-90 project() calls per solve, feasibility is
+                         monotonic in spend so the search is valid. Wired into project() indirectly
+                         via ui/project-adapter.js, not project() itself — kept as a separate
+                         exported function since it's a search OVER project(), not a mode of it.
   socialsecurity.js     earnings → AIME → PIA → claiming → COLA/haircut — DONE (implemented +
                          tested). fullRetirementAge() (1983-Amendments table), estimatePIA()
                          (bend-point formula on a "wage-indexed-equivalent" earnings setting —
@@ -57,7 +64,12 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          project() call. Shared by app.js (the live editor) and scenarios.js
                          (comparing saved scenarios) so both are always projected identically —
                          added in Phase 7 by extracting what used to be app.js's own
-                         computeProjection() body.
+                         computeProjection() body. When plan.strategy === 'maxSustainable',
+                         transparently runs engine/project.js's solveMaxSustainableSpending()
+                         instead of project() and stashes the solved amount on the result as
+                         `solvedSpending` — every other consumer (chart, table, scenario
+                         comparison) needs no special-casing, since the shape is otherwise
+                         identical to a normal project() result.
   scenarios.js           Phase 7: save the current state as a named, FROZEN scenario
                          (deep-copied, not a live reference — editing your accounts/assumptions
                          afterward never changes a saved scenario); select 2-4 to compare
@@ -65,7 +77,8 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          validated categorical palette, color assigned once per scenario at
                          save time so it never changes as the comparison selection changes) +
                          a headline-readout table (lasts/runs-out, ending balance, lifetime tax,
-                         lifetime effective tax rate, and the assumptions that differ). "Load"
+                         lifetime effective tax rate, "Max sustainable spend" when either scenario
+                         used that strategy, and the assumptions that differ). "Load"
                          puts a saved scenario back into the live editor. Own localStorage key
                          (`retirement-calc:scenarios:v1`), separate from the live editor's.
                          NOTE: `schemas/scenario.schema.json` (Phase 0) is unused — its nested
@@ -95,8 +108,7 @@ schemas/              JSON Schemas for profile / snapshot / scenario — scaffol
                        scenarios.js above)
 test/                 node:test suites (smoke, resolver, accumulation, decumulation, tax,
                        decumulation-tax, socialsecurity, social-security-decumulation,
-                       bracket-fill) — 107 passing. No new engine math in Phase 7 (scenario
-                       comparison is UI-only, reusing already-tested totals), so no new tests.
+                       bracket-fill, max-sustainable) — 113 passing.
 ```
 
 ## Running
@@ -124,10 +136,15 @@ rates, so it always matches what the engine can resolve. Every decumulation year
 **effective tax rate** (total tax ÷ total gross income) alongside the marginal rate the bracket
 breakdown shows — the number that actually answers "is this strategy tax-efficient," since
 bracket-fill can raise lifetime tax in dollars while keeping the effective rate low by spreading
-ordinary income across more years. And (Phase 7) **scenario comparison**: save the current
+ordinary income across more years. (Phase 7) **scenario comparison**: save the current
 accounts + assumptions as a named, frozen scenario, then pick 2-4 to compare side by side — a
 combined balance chart plus a headline-readout table (lasts/runs-out, ending balance, lifetime
-tax, lifetime effective tax rate). Charted in today's dollars with a retirement marker, a hover
+tax, lifetime effective tax rate, max sustainable spend). And a third withdrawal strategy,
+**maximum sustainable spending**: instead of typing a spending target, solve for the highest
+constant real annual spend the portfolio survives through the full horizon — a binary search
+(`solveMaxSustainableSpending`) over the same engine, exposed as a live "Solved: $X/yr" readout,
+and directly comparable across scenarios in the same comparison table. Charted in today's
+dollars with a retirement marker, a hover
 tooltip that now includes age, and table view (tax/net-spendable/age columns, sticky headers,
 clickable per-bracket Tax detail showing the standard deduction + marginal-vs-effective rate) —
 the whole view preserves scroll position across re-renders now, so expanding a table row no
