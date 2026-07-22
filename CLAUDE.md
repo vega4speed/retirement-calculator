@@ -48,9 +48,30 @@ engine/               pure calculation modules (unit-tested)
                          the same bracket-fill machinery.
 ui/                   vanilla-JS UI (no framework, no deps)
   app.js                app shell: accounts + filing/tax + working-years + retirement-spending
-                         + Social Security assumptions + full-lifecycle projection; localStorage
-                         persistence. Live benefit-estimate readout in the SS section, recomputed
-                         from the same engine functions the projection uses (never drifts).
+                         + Social Security assumptions + full-lifecycle projection + scenarios
+                         (Phase 7); localStorage persistence. Live benefit-estimate readout in
+                         the SS section, recomputed from the same engine functions the
+                         projection uses (never drifts).
+  project-adapter.js    projectFor(state, taxTables) — the ONE place that maps the app's
+                         {snapshot, assumptions, plan, filing, social} state shape to a
+                         project() call. Shared by app.js (the live editor) and scenarios.js
+                         (comparing saved scenarios) so both are always projected identically —
+                         added in Phase 7 by extracting what used to be app.js's own
+                         computeProjection() body.
+  scenarios.js           Phase 7: save the current state as a named, FROZEN scenario
+                         (deep-copied, not a live reference — editing your accounts/assumptions
+                         afterward never changes a saved scenario); select 2-4 to compare
+                         side by side — a combined today's-$ balance chart (up to 4 lines,
+                         validated categorical palette, color assigned once per scenario at
+                         save time so it never changes as the comparison selection changes) +
+                         a headline-readout table (lasts/runs-out, ending balance, lifetime tax,
+                         lifetime effective tax rate, and the assumptions that differ). "Load"
+                         puts a saved scenario back into the live editor. Own localStorage key
+                         (`retirement-calc:scenarios:v1`), separate from the live editor's.
+                         NOTE: `schemas/scenario.schema.json` (Phase 0) is unused — its nested
+                         shape predates how the live app's state actually evolved through
+                         Phases 2-6; scenarios.js persists the app's real (flatter) state shape
+                         directly instead of forcing a fit to that schema.
   accounts-editor.js    enter/edit accounts, tax statuses, balances, cost basis
   setting-control.js    the reusable Simple/Expand knob (supports `perAccount:false` for
                          household-level settings like spending), with a live resolved preview
@@ -63,12 +84,19 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          vs-effective-rate line — the whole view preserves scroll position, both
                          the page's own AND the table's own internal scroll container, across
                          re-renders)
+  chart-utils.js         shared chart primitives (usd/usdFull formatters, niceCeil axis rounding,
+                         xTickYears, the fixed non-categorical COL tokens) — factored out in
+                         Phase 7 so projection-view.js's chart and scenarios.js's comparison
+                         chart don't each keep their own copy.
   dom.js, formats.js    tiny DOM builder (incl. SVG) + value<->input formatting helpers
 data/                 tax-tables.json (verified 2025/2026 figures) + EXAMPLE templates
-schemas/              JSON Schemas for profile / snapshot / scenario
+schemas/              JSON Schemas for profile / snapshot / scenario — scaffolding from Phase 0,
+                       predates the app's actual (simpler) state shape; not wired up (see
+                       scenarios.js above)
 test/                 node:test suites (smoke, resolver, accumulation, decumulation, tax,
                        decumulation-tax, socialsecurity, social-security-decumulation,
-                       bracket-fill) — 107 passing
+                       bracket-fill) — 107 passing. No new engine math in Phase 7 (scenario
+                       comparison is UI-only, reusing already-tested totals), so no new tests.
 ```
 
 ## Running
@@ -87,18 +115,25 @@ withdrawal strategy, tax-status-aware sequencing, RMDs (SECURE 2.0 birth-year ru
 ordinary + capital-gains tax with gross-up — **Social Security**: estimated from earnings via
 the real bend-point PIA formula (not typed in as a fixed number), claiming-age adjustment, COLA,
 a solvency-haircut lever, and real taxation of the benefit (provisional-income formula) composed
-into the same gross-up — and (Phase 6) **tax-bracket-aware withdrawal sequencing**: a `bracketFill`
+into the same gross-up — (Phase 6) **tax-bracket-aware withdrawal sequencing**: a `bracketFill`
 mode that draws tax-deferred accounts FIRST each year, up to the top of a chosen ordinary-income
 bracket, before touching taxable/Roth — the opposite preference from conventional order, meant to
 deliberately realize cheap ordinary income in low-income retirement years instead of letting it
 all pile up as RMDs later. The UI's bracket picker lists the current filing status's own bracket
-rates, so it always matches what the engine can resolve. Charted in today's dollars with a
-retirement marker, a hover tooltip that now includes age, and table view (tax/net-spendable/age
-columns, sticky headers, clickable per-bracket Tax detail) — the whole view preserves scroll
-position across re-renders now, so expanding a table row no longer jumps you back to the top. In
-progress: Roth conversions (the natural extension of the same bracket-fill machinery — convert
-tax-deferred → Roth up to a bracket ceiling in the gap years before RMDs start) and couple/spousal
-Social Security.
+rates, so it always matches what the engine can resolve. Every decumulation year also reports an
+**effective tax rate** (total tax ÷ total gross income) alongside the marginal rate the bracket
+breakdown shows — the number that actually answers "is this strategy tax-efficient," since
+bracket-fill can raise lifetime tax in dollars while keeping the effective rate low by spreading
+ordinary income across more years. And (Phase 7) **scenario comparison**: save the current
+accounts + assumptions as a named, frozen scenario, then pick 2-4 to compare side by side — a
+combined balance chart plus a headline-readout table (lasts/runs-out, ending balance, lifetime
+tax, lifetime effective tax rate). Charted in today's dollars with a retirement marker, a hover
+tooltip that now includes age, and table view (tax/net-spendable/age columns, sticky headers,
+clickable per-bracket Tax detail showing the standard deduction + marginal-vs-effective rate) —
+the whole view preserves scroll position across re-renders now, so expanding a table row no
+longer jumps you back to the top. In progress: Roth conversions (the natural extension of the
+same bracket-fill machinery — convert tax-deferred → Roth up to a bracket ceiling in the gap
+years before RMDs start) and couple/spousal Social Security.
 
 **Fixed 2026-07-22 (two small UI bugs):**
 1. Clicking a Tax cell to expand its per-bracket breakdown — or toggling "Show table" — fully

@@ -9,46 +9,13 @@
 // and a table view provide the interaction/accessibility layers.
 
 import { h, s, clear } from './dom.js';
+import { COL as BASE_COL, usd, usdFull, niceCeil, xTickYears } from './chart-utils.js';
 
 const COL = {
+  ...BASE_COL,
   real: '#2a78d6',      // categorical slot 1 — today's dollars (headline)
   nominal: '#eb6834',   // categorical slot 2 — nominal
-  ink: '#0b0b0b',
-  ink2: '#52514e',
-  muted: '#898781',
-  grid: '#e1e0d9',
-  base: '#c3c2b7',
-  good: '#0ca30c',      // fixed status palette — never themed
-  critical: '#d03b3b',
 };
-
-const usd = (v) => {
-  const n = Math.round(v);
-  const a = Math.abs(n);
-  if (a >= 1e6) return '$' + (n / 1e6).toFixed(a >= 1e7 ? 1 : 2).replace(/\.?0+$/, '') + 'M';
-  if (a >= 1e3) return '$' + Math.round(n / 1e3) + 'k';
-  return '$' + n.toLocaleString();
-};
-const usdFull = (v) => '$' + Math.round(v).toLocaleString();
-
-function niceCeil(v) {
-  if (v <= 0) return 1;
-  const exp = Math.floor(Math.log10(v));
-  const base = 10 ** exp;
-  const f = v / base;
-  const nf = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10;
-  return nf * base;
-}
-
-function xTickYears(baseYear, endYear) {
-  const span = endYear - baseYear;
-  if (span <= 0) return [baseYear];
-  const step = span <= 12 ? 2 : span <= 30 ? 5 : 10;
-  const out = [];
-  for (let y = baseYear; y <= endYear; y += step) out.push(y);
-  if (out[out.length - 1] !== endYear) out.push(endYear);
-  return out;
-}
 
 function statTile(label, value, sub, accent) {
   return h('div', { class: 'stat' },

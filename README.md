@@ -42,9 +42,11 @@ engine/             pure calculation modules (no DOM, no I/O) — unit-tested
   strategies.js       superseded by project.js's built-in sequencing (now incl.
                        bracketFill, Phase 6); Roth conversions remain the natural
                        extension of the same machinery
-ui/                 vanilla-JS UI (accounts, Simple/Expand controls, projection chart)
+ui/                 vanilla-JS UI (accounts, Simple/Expand controls, projection chart,
+                     scenario comparison — Phase 7)
 data/               tax-tables.json + example profile/snapshot/scenario templates
-schemas/            JSON Schemas for profile / snapshot / scenario
+schemas/            JSON Schemas for profile / snapshot / scenario (Phase 0 scaffolding,
+                     not wired up — the app's actual state shape evolved differently)
 test/               node:test suites
 ```
 
@@ -74,8 +76,17 @@ total gross income — the number that actually shows whether a strategy is tax-
 strategy can raise lifetime tax in dollars while keeping the effective rate low by spreading
 income across more years). There's a lifetime version of that same rate as a stat tile, for
 comparing strategies at a glance. The view preserves your scroll position (both the page's and
-the table's own internal scroll) across these interactions instead of jumping to the top. In
-progress: Roth conversions (the natural extension of the bracket-fill machinery) and
+the table's own internal scroll) across these interactions instead of jumping to the top.
+
+**Phase 7: scenario comparison.** Save the current accounts + assumptions as a named scenario —
+it's a frozen snapshot, so editing your live accounts or assumptions afterward never changes a
+scenario you already saved. Select 2–4 scenarios to compare side by side: a combined today's-
+dollars balance chart (each scenario keeps the same color for as long as it's part of a
+comparison, even as you check/uncheck others) and a headline-readout table — does the money last,
+ending balance, lifetime tax, lifetime effective tax rate, and the assumptions that actually
+differ between them. "Load" puts a saved scenario back into the live editor to keep tweaking it.
+
+In progress: Roth conversions (the natural extension of the bracket-fill machinery) and
 couple/spousal Social Security.
 
 Known simplifications, documented in the code: state tax is a flat rate (no state brackets);

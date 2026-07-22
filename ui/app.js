@@ -12,16 +12,13 @@ import { h, clear, download } from './dom.js';
 import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
-import { project } from '../engine/project.js';
 import { resolveYearTable, bracketBreakdown, standardDeduction } from '../engine/tax.js';
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from '../engine/socialsecurity.js';
+import { projectFor, TAX_ANCHOR_YEAR } from './project-adapter.js';
+import { createScenariosView } from './scenarios.js';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const STORAGE_KEY = 'retirement-calc:v1';
-// Latest verified year in data/tax-tables.json (see that file's `_meta.verificationStatus`).
-// Brackets/standard-deduction for any other year are projected from this anchor by the
-// bracketIndexingRate/standardDeductionIndexingRate settings (engine/tax.js resolveYearTable).
-const TAX_ANCHOR_YEAR = 2026;
 
 const EXAMPLE_ACCOUNTS = [
   { id: 'ex-401k', label: 'Example 401(k)', ownerId: 'me', taxStatus: 'taxDeferred', balance: 100000 },
@@ -119,6 +116,24 @@ export async function mount(root) {
   }
 
   const projectionView = createProjectionView({ bracketBreakdownFor });
+
+  // Loads a saved scenario BACK into the live editor (overwriting it — the scenario itself stays
+  // untouched, since it was saved as a deep copy). Mirrors loadPersisted()'s defaults-then-
+  // override merge so a scenario saved before a new field existed still loads without crashing.
+  function loadScenario(scn) {
+    applySnapshot(scn.snapshot);
+    assumptions = { ...defaultAssumptions(), ...scn.assumptions };
+    Object.assign(plan, scn.plan);
+    filing = { ...defaultFiling(), ...scn.filing };
+    social = { ...defaultSocial(filing.birthYear), ...scn.social };
+    persist();
+    rebuild();
+  }
+  const scenariosView = createScenariosView({
+    getCurrentState: () => ({ snapshot, assumptions, plan, filing, social }),
+    taxTables,
+    onLoad: loadScenario,
+  });
   let acctAwareControls = [];
 
   // --- persistence (localStorage only) -------------------------------------
@@ -167,43 +182,7 @@ export async function mount(root) {
 
   // --- projection ----------------------------------------------------------
   function computeProjection() {
-    const accounts = snapshot.accounts.map((a) => ({
-      id: a.id, balance: Number(a.balance) || 0, taxStatus: a.taxStatus,
-      costBasis: a.costBasis != null ? Number(a.costBasis) : undefined,
-    }));
-    if (!accounts.length) return null;
-    const startYear = baseYear();
-    const retirementYear = Math.max(startYear, Math.round(plan.retirementYear) || startYear);
-    const horizonYear = Math.max(retirementYear, Math.round(plan.horizonYear) || retirementYear);
-    return project({
-      baseYear: startYear, retirementYear, horizonYear, accounts,
-      returnRate: assumptions.returnRate,
-      contributions: assumptions.contributions,
-      wageGrowth: assumptions.wageGrowth,
-      inflation: assumptions.inflation,
-      spending: assumptions.spending,
-      otherIncome: assumptions.otherIncome,
-      withdrawalPercent: assumptions.withdrawalPercent,
-      strategy: plan.strategy,
-      sequencing: plan.sequencing,
-      bracketFillRate: plan.sequencing === 'bracketFill' ? plan.bracketFillRate : undefined,
-      // birthYear is passed unconditionally — it drives the table's age column even when tax
-      // tables didn't load (age display doesn't depend on tax being computed).
-      birthYear: Number.isFinite(filing.birthYear) ? filing.birthYear : undefined,
-      // The rest of tax is opt-in (engine/project.js): only passed through when tables loaded.
-      // Bracket/standard-deduction indexing reuses the `inflation` assumption — a defensible
-      // default ("brackets roughly keep pace with prices"); a dedicated knob is a later refinement.
-      ...(taxTables ? {
-        filingStatus: filing.filingStatus,
-        taxTables, anchorYear: TAX_ANCHOR_YEAR,
-        bracketIndexingRate: assumptions.inflation, standardDeductionIndexingRate: assumptions.inflation,
-        stateTaxRate: assumptions.stateTaxRate,
-        // Social Security (Phase 5) is opt-in within tax mode: needs earnings + claiming age.
-        earnings: assumptions.earnings, careerStartYear: social.careerStartYear, claimingAge: social.claimingAge,
-        colaRate: assumptions.colaRate,
-        solvencyHaircutStartYear: social.solvencyHaircutStartYear, solvencyHaircutFactor: social.solvencyHaircutFactor,
-      } : {}),
-    });
+    return projectFor({ snapshot, assumptions, plan, filing, social }, taxTables);
   }
   function refreshProjection() {
     const r = computeProjection();
@@ -455,6 +434,9 @@ export async function mount(root) {
       ),
       section("6 · Projection (today's dollars)",
         projectionView.el,
+      ),
+      section('7 · Scenarios',
+        scenariosView.el,
       ),
     );
     refreshProjection();
