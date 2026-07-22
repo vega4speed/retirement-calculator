@@ -100,6 +100,13 @@ export async function mount(root) {
 
   // Live "here's what that produces" readout for the Social Security section — recomputed from
   // the same engine functions the projection itself uses, so it never drifts from the real result.
+  // ssEstimateBox (below) is a PERSISTENT element updated from refreshProjection(), same reason
+  // and same fix shape as maxSustainableBox: "Career start year"/"Claiming age" were manually
+  // routed through a full rebuild() specifically so this readout would refresh ("so the live
+  // benefit readout refreshes" — see socialNumberRow's call sites), but "Annual earnings" and
+  // "Wage growth" go through the lighter settingRow -> onEdit() path, which never touched it —
+  // reported bug: changing earnings 70k -> 150k didn't move the estimated benefit at all, even
+  // though the underlying projection (and the max-sustainable solve) DID pick up the change.
   function socialSecurityEstimate() {
     if (!taxTables || !Number.isFinite(filing.birthYear) || !Number.isInteger(social.careerStartYear)) return null;
     const retirementYear = Math.max(baseYear(), Math.round(plan.retirementYear) || baseYear());
@@ -188,6 +195,7 @@ export async function mount(root) {
     const r = computeProjection();
     if (r) projectionView.render(r); else projectionView.clearView();
     updateMaxSustainableReadout(r);
+    updateSocialSecurityReadout();
   }
 
   // --- helpers -------------------------------------------------------------
@@ -359,6 +367,18 @@ export async function mount(root) {
     ));
   }
 
+  // Same persistent-element fix as maxSustainableBox above, for the Social Security estimate.
+  const ssEstimateBox = h('div');
+  function updateSocialSecurityReadout() {
+    clear(ssEstimateBox);
+    const est = socialSecurityEstimate();
+    if (!est) return;
+    ssEstimateBox.append(h('div', { class: 'ss-estimate' },
+      h('strong', {}, `Estimated benefit: $${Math.round(est.annualBenefit).toLocaleString()}/yr`),
+      ` starting ${est.claimingYear} (age ${social.claimingAge}) · PIA $${Math.round(est.pia).toLocaleString()}/mo at FRA ${formatYearsMonths(est.fra)}`,
+    ));
+  }
+
   function selectRow(label, value, options, onSet) {
     const select = h('select', {
       onchange: (e) => { onSet(e.target.value); onEdit(); rebuild(); },
@@ -452,14 +472,7 @@ export async function mount(root) {
         socialNumberRow('Solvency haircut starts', () => social.solvencyHaircutStartYear, (v) => { social.solvencyHaircutStartYear = v; },
           () => 'OASI trust fund\'s projected depletion year'),
         haircutFactorRow(),
-        (() => {
-          const est = socialSecurityEstimate();
-          if (!est) return null;
-          return h('div', { class: 'ss-estimate' },
-            h('strong', {}, `Estimated benefit: $${Math.round(est.annualBenefit).toLocaleString()}/yr`),
-            ` starting ${est.claimingYear} (age ${social.claimingAge}) · PIA $${Math.round(est.pia).toLocaleString()}/mo at FRA ${formatYearsMonths(est.fra)}`,
-          );
-        })(),
+        ssEstimateBox,
       ),
       section("6 · Projection (today's dollars)",
         projectionView.el,
