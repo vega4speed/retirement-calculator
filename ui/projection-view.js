@@ -161,7 +161,10 @@ function buildChart(result) {
     if (r.phase === 'accumulation' && r.totals.contribution) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.contribution)} contributed`));
     if (r.phase === 'decumulation') {
       lines.push(h('div', { class: 'tip-sub' }, `− ${usdFull(r.totals.withdrawal)} withdrawn`));
-      if (r.totals.tax) lines.push(h('div', { class: 'tip-sub' }, `− ${usdFull(r.totals.tax)} tax → ${usdFull(r.totals.netSpendable)} net`));
+      if (r.totals.tax) {
+        const effRate = r.totals.effectiveTaxRate != null ? ` (${(r.totals.effectiveTaxRate * 100).toFixed(1)}% effective)` : '';
+        lines.push(h('div', { class: 'tip-sub' }, `− ${usdFull(r.totals.tax)} tax${effRate} → ${usdFull(r.totals.netSpendable)} net`));
+      }
       if (r.totals.reinvestment) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.reinvestment)} RMD surplus reinvested`));
       if (r.totals.shortfall > 1e-6) lines.push(h('div', { class: 'tip-sub', style: { color: COL.critical } }, `Shortfall: ${usdFull(r.totals.shortfall)}`));
     }
@@ -185,22 +188,43 @@ function buildChart(result) {
 }
 
 function bracketDetailRow(colspan, breakdown) {
-  const section = (title, rows) => (!rows || !rows.length) ? null : h('div', { class: 'bracket-section' },
-    h('h5', {}, title),
-    h('table', { class: 'bracket-mini' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Rate'), h('th', { class: 'r' }, 'Amount at this rate'), h('th', { class: 'r' }, 'Tax'))),
-      h('tbody', {}, ...rows.map((row) => h('tr', {},
-        h('td', {}, `${(row.rate * 100).toFixed(0)}%`),
-        h('td', { class: 'r' }, usdFull(row.amount)),
-        h('td', { class: 'r' }, usdFull(row.tax)),
-      ))),
-    ),
-  );
-  const ordinary = section('Ordinary income brackets', breakdown?.ordinary);
+  const stdDeductionRow = breakdown?.stdDeduction > 0
+    ? h('tr', { class: 'muted' },
+        h('td', {}, 'std. deduction'),
+        h('td', { class: 'r' }, `up to ${usdFull(breakdown.stdDeduction)}`),
+        h('td', { class: 'r' }, usdFull(0)),
+      )
+    : null;
+  const section = (title, rows, leadingRow) => {
+    if (!leadingRow && (!rows || !rows.length)) return null;
+    return h('div', { class: 'bracket-section' },
+      h('h5', {}, title),
+      h('table', { class: 'bracket-mini' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Rate'), h('th', { class: 'r' }, 'Amount at this rate'), h('th', { class: 'r' }, 'Tax'))),
+        h('tbody', {}, leadingRow, ...(rows || []).map((row) => h('tr', {},
+          h('td', {}, `${(row.rate * 100).toFixed(0)}%`),
+          h('td', { class: 'r' }, usdFull(row.amount)),
+          h('td', { class: 'r' }, usdFull(row.tax)),
+        ))),
+      ),
+    );
+  };
+  const ordinary = section('Ordinary income brackets', breakdown?.ordinary, stdDeductionRow);
   const ltcg = section('Capital gains brackets', breakdown?.ltcg);
+  const topMarginalRate = breakdown?.ordinary?.length ? breakdown.ordinary[breakdown.ordinary.length - 1].rate : 0;
+  // The MARGINAL rate (top bracket touched, shown above) is the rate on the next dollar. The
+  // EFFECTIVE rate — tax actually paid divided by total gross income received — is usually much
+  // lower, since the standard deduction and every lower bracket are taxed at less than that top
+  // rate. This is the number that shows whether a strategy is genuinely tax-efficient: bracket-
+  // fill sequencing can raise LIFETIME tax in dollars while keeping the effective rate low each
+  // year, by spreading ordinary income across many low-bracket years instead of compressing it.
+  const rateCompare = breakdown?.effectiveTaxRate != null && (ordinary || ltcg)
+    ? h('p', { class: 'muted small' },
+        `Marginal (top bracket touched): ${(topMarginalRate * 100).toFixed(0)}% · Effective (total tax ÷ total gross income): ${(breakdown.effectiveTaxRate * 100).toFixed(1)}%`)
+    : null;
   return h('tr', { class: 'bracket-detail' }, h('td', { colspan },
     (ordinary || ltcg)
-      ? h('div', { class: 'bracket-detail-wrap' }, ordinary, ltcg)
+      ? h('div', {}, h('div', { class: 'bracket-detail-wrap' }, ordinary, ltcg), rateCompare)
       : h('p', { class: 'muted small' }, 'No taxable income this year.'),
   ));
 }
@@ -281,6 +305,14 @@ export function createProjectionView(opts = {}) {
     const endRow = r.years[r.years.length - 1];
     const contributed = r.years.reduce((sn, y) => sn + (y.totals.contribution || 0), 0);
     const lifetimeTax = r.years.reduce((sn, y) => sn + (y.totals.tax || 0), 0);
+    const lifetimeGrossIncome = r.years.reduce((sn, y) => sn + (y.totals.grossIncome || 0), 0);
+    // Lifetime EFFECTIVE rate: total tax ÷ total gross retirement income, summed across years
+    // (not an average of the per-year rates, which would over-weight small-income years). This
+    // is the number that answers "is a strategy actually tax-efficient" — e.g. bracket-fill
+    // sequencing can raise lifetime tax in dollars (it deliberately realizes more ordinary income
+    // sooner) while still keeping this rate low, because it's spread across many low-bracket
+    // years instead of compressed into fewer years once RMDs force it.
+    const lifetimeEffectiveRate = lifetimeGrossIncome > 0 ? lifetimeTax / lifetimeGrossIncome : 0;
     const growth = retRow.totals.endBalance - startTotal - contributed;
     const yrs = r.retirementYear - r.baseYear;
 
@@ -291,6 +323,7 @@ export function createProjectionView(opts = {}) {
         statTile('Total contributed', usd(contributed), 'over the accumulation years'),
         statTile("End of plan · today's dollars", usd(endRow.real.endBalance), `${r.horizonYear}`, endRow.real.endBalance > 0 ? COL.real : COL.critical),
         lifetimeTax > 0 ? statTile('Lifetime tax in retirement', usd(lifetimeTax), 'nominal, federal + state') : null,
+        lifetimeTax > 0 ? statTile('Lifetime effective tax rate', `${(lifetimeEffectiveRate * 100).toFixed(1)}%`, 'total tax ÷ total gross income — compare across strategies') : null,
       ),
       buildChart(r),
       h('div', { class: 'table-toggle' },

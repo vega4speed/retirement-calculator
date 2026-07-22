@@ -13,7 +13,7 @@ import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
 import { project } from '../engine/project.js';
-import { resolveYearTable, bracketBreakdown } from '../engine/tax.js';
+import { resolveYearTable, bracketBreakdown, standardDeduction } from '../engine/tax.js';
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from '../engine/socialsecurity.js';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -92,11 +92,13 @@ export async function mount(root) {
       tables: taxTables, year: row.year, anchorYear: TAX_ANCHOR_YEAR,
       bracketIndexingRate: assumptions.inflation, standardDeductionIndexingRate: assumptions.inflation,
     });
+    const age65Count = row.age != null && row.age >= 65 ? 1 : 0;
+    const stdDeduction = standardDeduction({ filingStatus: filing.filingStatus, age65Count, yearTable });
     const ordinary = bracketBreakdown(row.totals.ordinaryTaxableIncome, yearTable.ordinaryBrackets[filing.filingStatus]);
     const ltcg = row.totals.capitalGain > 0
       ? bracketBreakdown(row.totals.capitalGain, yearTable.ltcgBrackets[filing.filingStatus], row.totals.ordinaryTaxableIncome)
       : [];
-    return { ordinary, ltcg };
+    return { ordinary, ltcg, stdDeduction, effectiveTaxRate: row.totals.effectiveTaxRate };
   }
 
   // Live "here's what that produces" readout for the Social Security section — recomputed from

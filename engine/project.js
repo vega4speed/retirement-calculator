@@ -559,6 +559,14 @@ export function projectDecumulation(p) {
     totals.ordinaryTaxableIncome = ordinaryTaxableIncome;
     totals.capitalGain = capitalGain;
     totals.netSpendable = otherIncomeNominal + ssBenefitNominal + (totals.withdrawal - tax - totals.reinvestment);
+    // Gross income realized this year (before tax, including tax-free withdrawals like Roth) and
+    // the EFFECTIVE rate that funds — as opposed to the MARGINAL rate the bracket breakdown shows
+    // (the rate on the next/last dollar). Effective rate is what a bracket-fill-vs-conventional
+    // comparison actually needs: bracket-fill can raise lifetime tax in dollars while keeping the
+    // effective rate low each year (spreading ordinary income across many low-bracket years)
+    // rather than compressing it into a smaller, more-heavily-taxed window once RMDs force it.
+    totals.grossIncome = otherIncomeNominal + ssBenefitNominal + totals.withdrawal;
+    totals.effectiveTaxRate = totals.grossIncome > 1e-9 ? tax / totals.grossIncome : 0;
 
     if (shortfall > 1e-9 && firstDepletionYear === null) firstDepletionYear = year;
 

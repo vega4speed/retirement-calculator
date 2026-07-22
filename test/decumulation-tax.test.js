@@ -48,6 +48,33 @@ test('gross-up on a tax-deferred withdrawal converges to the exact algebraic sol
   approx(y.totals.tax, 4340.909091);
   approx(y.totals.ordinaryTaxableIncome, 38240.909091);
   approx(y.totals.netSpendable, 50000);
+  approx(y.totals.grossIncome, 54340.909091); // no otherIncome/SS this year -> equals the withdrawal
+  approx(y.totals.effectiveTaxRate, 4340.909091 / 54340.909091, 1e-6); // ~7.99%, well under the 12% marginal rate
+});
+
+test('effectiveTaxRate is tax / (withdrawal + otherIncome + socialSecurity), not just tax / withdrawal', () => {
+  const r = projectDecumulation({
+    startYear: 2026, endYear: 2026,
+    accounts: [{ id: 'ira', balance: 10000000, taxStatus: 'taxDeferred' }],
+    returnRate: { default: 0 }, inflation: { default: 0 }, spending: { default: 50000 },
+    otherIncome: { default: 10000 },
+    filingStatus: 'single', taxTables, anchorYear: 2026,
+  });
+  const y = row(r, 2026);
+  approx(y.totals.grossIncome, y.totals.otherIncome + y.totals.withdrawal, 1e-6);
+  approx(y.totals.effectiveTaxRate, y.totals.tax / y.totals.grossIncome, 1e-9);
+});
+
+test('effectiveTaxRate is 0 (not NaN) when there is no income at all', () => {
+  const r = projectDecumulation({
+    startYear: 2026, endYear: 2026,
+    accounts: [{ id: 'a', balance: 100000, taxStatus: 'taxable' }],
+    returnRate: { default: 0 }, inflation: { default: 0 }, spending: { default: 0 },
+    filingStatus: 'single', taxTables, anchorYear: 2026,
+  });
+  const y = row(r, 2026);
+  approx(y.totals.grossIncome, 0, 1e-9);
+  approx(y.totals.effectiveTaxRate, 0, 1e-9);
 });
 
 test('capital gains withdrawal that stays within the 0% LTCG bracket: no tax, net == gross exactly', () => {
