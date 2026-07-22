@@ -187,6 +187,7 @@ export async function mount(root) {
   function refreshProjection() {
     const r = computeProjection();
     if (r) projectionView.render(r); else projectionView.clearView();
+    updateMaxSustainableReadout(r);
   }
 
   // --- helpers -------------------------------------------------------------
@@ -335,19 +336,27 @@ export async function mount(root) {
 
   // Live "here's what that produces" readout for the 'maxSustainable' strategy — no input to
   // type, the amount is solved from every other assumption already set (design doc §9: "what's
-  // the safe real spending it does support?"). Recomputed on demand rather than cached, same
-  // pattern as socialSecurityEstimate() above; the solver is a few dozen project() calls, fast
-  // enough to run inline on every rebuild without a spinner.
-  function maxSustainableRow() {
-    const r = computeProjection();
-    if (!r) return h('p', { class: 'muted small' }, 'Add at least one account to solve for a sustainable spending level.');
+  // the safe real spending it does support?"). This is a PERSISTENT element (like projectionView
+  // and scenariosView above), not markup rebuilt fresh each time: most edits (rate of return,
+  // retirement year, ...) go through onEdit() -> refreshProjection() only, not the full-page
+  // rebuild() — a plain rebuild()-time render() here would go stale on exactly those edits
+  // (reported bug: changing retirement year or rate of return didn't re-solve the readout, even
+  // though the chart/table below it — which DOES go through refreshProjection() — was already
+  // correct). updateMaxSustainableReadout() is called from refreshProjection() itself so it's
+  // kept in sync on every edit path, not just full rebuilds.
+  const maxSustainableBox = h('div');
+  function updateMaxSustainableReadout(r) {
+    clear(maxSustainableBox);
+    if (plan.strategy !== 'maxSustainable') return;
+    if (!r) { maxSustainableBox.append(h('p', { class: 'muted small' }, 'Add at least one account to solve for a sustainable spending level.')); return; }
     if (r.solvedSpending == null) {
-      return h('p', { class: 'muted small' }, 'Set a "Plan through year" past retirement to solve for a sustainable spending level.');
+      maxSustainableBox.append(h('p', { class: 'muted small' }, 'Set a "Plan through year" past retirement to solve for a sustainable spending level.'));
+      return;
     }
-    return h('div', { class: 'ss-estimate' },
+    maxSustainableBox.append(h('div', { class: 'ss-estimate' },
       h('strong', {}, `Solved: $${Math.round(r.solvedSpending).toLocaleString()}/yr`),
       ` — the highest constant spending (today's dollars) that lasts through ${r.horizonYear} under your current assumptions.`,
-    );
+    ));
   }
 
   function selectRow(label, value, options, onSet) {
@@ -415,7 +424,7 @@ export async function mount(root) {
         plan.strategy === 'fixedPercent'
           ? settingRow('withdrawalPercent', 'Withdrawal %', 'percent', false)
           : plan.strategy === 'maxSustainable'
-            ? maxSustainableRow()
+            ? maxSustainableBox
             : settingRow('spending', 'Annual spending (today’s $)', 'money', false),
         settingRow('otherIncome', "Other income — pension/rental (today's $, not yet taxed — a v1 simplification)", 'money', false),
         selectRow('Withdrawal order', plan.sequencing, [

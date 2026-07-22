@@ -288,7 +288,12 @@ export function createProjectionView(opts = {}) {
         survivalTile(r),
         statTile("At retirement · today's dollars", usd(retRow.real.endBalance), `${r.retirementYear} · in ${yrs} yr${yrs === 1 ? '' : 's'}`, COL.real),
         statTile('Total contributed', usd(contributed), 'over the accumulation years'),
-        statTile("End of plan · today's dollars", usd(endRow.real.endBalance), `${r.horizonYear}`, endRow.real.endBalance > 0 ? COL.real : COL.critical),
+        // Under 'maxSustainable', ending balance is always ~$0 by construction (that's what the
+        // solver targets) — showing it as a headline number is misleading, not just uninteresting.
+        // The actually meaningful number for this strategy is the spend it solved for.
+        r.solvedSpending != null
+          ? statTile("Annual spend · today's $", usd(r.solvedSpending), 'maximum sustainable through ' + r.horizonYear, COL.real)
+          : statTile("End of plan · today's dollars", usd(endRow.real.endBalance), `${r.horizonYear}`, endRow.real.endBalance > 0 ? COL.real : COL.critical),
         lifetimeTax > 0 ? statTile('Lifetime tax in retirement', usd(lifetimeTax), 'nominal, federal + state') : null,
         lifetimeTax > 0 ? statTile('Lifetime effective tax rate', `${(lifetimeEffectiveRate * 100).toFixed(1)}%`, 'total tax ÷ total gross income — compare across strategies') : null,
       ),
