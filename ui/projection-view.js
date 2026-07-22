@@ -265,8 +265,14 @@ export function createProjectionView(opts = {}) {
     // A toggle (Show table / expand a Tax cell) fully rebuilds this view's DOM. Clearing and
     // re-appending a large subtree loses the browser's scroll anchoring, so it silently snaps
     // the page to the top — jarring when you're clicking a link deep in a long table. Capture
-    // and restore the scroll position around the rebuild so it's a no-op to the user.
+    // and restore the scroll position around the rebuild so it's a no-op to the user. Two
+    // separate scroll positions matter here: the page's own scroll, AND the table's internal
+    // scroll (.table-scroll has its own max-height + overflow so long tables don't blow out the
+    // page) — the table gets torn down and rebuilt as a brand-new element, so its scrollTop
+    // resets to 0 unless captured from the OLD element and reapplied to the NEW one.
     const scrollY = window.scrollY;
+    const prevTableScroll = el.querySelector('.table-scroll');
+    const tableScrollTop = prevTableScroll ? prevTableScroll.scrollTop : 0;
     clear(el);
     if (!current) { el.append(h('p', { class: 'muted' }, 'Add at least one account to see a projection.')); window.scrollTo(0, scrollY); return; }
     const r = current;
@@ -299,6 +305,8 @@ export function createProjectionView(opts = {}) {
       }));
     }
     el.append(...parts);
+    const newTableScroll = el.querySelector('.table-scroll');
+    if (newTableScroll) newTableScroll.scrollTop = tableScrollTop;
     window.scrollTo(0, scrollY);
   }
 
