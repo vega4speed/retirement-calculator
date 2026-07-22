@@ -183,29 +183,50 @@ export function createScenariosView(opts) {
   const el = h('div');
   let scenarios = loadScenarios();
   let selectedIds = []; // ordered by selection
+  // Which scenario the live editor was last loaded from (or saved as) — lets "Update" overwrite
+  // that SAME scenario in place instead of "Save current as scenario" always minting a new one,
+  // which was the only way to persist a change before and left no way to actually update one.
+  let loadedScenarioId = null;
 
   function persist() { saveScenarios(scenarios); }
 
   function render() {
     clear(el);
+    const loadedScenario = loadedScenarioId ? scenarios.find((s2) => s2.id === loadedScenarioId) : null;
+    if (!loadedScenario) loadedScenarioId = null;
+
     const nameInput = h('input', { type: 'text', placeholder: 'Scenario name (e.g. "Retire at 62")', class: 'scenario-name' });
-    const saveBtn = h('button', {
-      onclick: () => {
-        const label = nameInput.value.trim();
-        if (!label) { nameInput.focus(); return; }
-        const state = opts.getCurrentState();
-        const cloned = JSON.parse(JSON.stringify(state));
-        scenarios.push({
-          id: `scn-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          label,
-          createdAt: new Date().toISOString(),
-          colorSlot: scenarios.length % SERIES_PALETTE.length,
-          ...cloned,
-        });
-        persist();
-        render();
-      },
-    }, 'Save current as scenario');
+    const saveAsNew = () => {
+      const label = nameInput.value.trim();
+      if (!label) { nameInput.focus(); return; }
+      const state = opts.getCurrentState();
+      const cloned = JSON.parse(JSON.stringify(state));
+      const scn = {
+        id: `scn-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        label,
+        createdAt: new Date().toISOString(),
+        colorSlot: scenarios.length % SERIES_PALETTE.length,
+        ...cloned,
+      };
+      scenarios.push(scn);
+      loadedScenarioId = scn.id; // further edits can now "Update" this new scenario in place
+      persist();
+      render();
+    };
+    const saveBtn = h('button', { onclick: saveAsNew }, 'Save current as scenario');
+
+    const updateBox = loadedScenario
+      ? h('div', { class: 'scenario-update' },
+          h('span', { class: 'muted small' }, `Currently editing based on "${loadedScenario.label}".`),
+          h('button', { class: 'ghost', onclick: () => {
+            const state = opts.getCurrentState();
+            const cloned = JSON.parse(JSON.stringify(state));
+            Object.assign(loadedScenario, cloned);
+            persist();
+            render();
+          } }, `Update "${loadedScenario.label}" with current changes`),
+        )
+      : null;
 
     const rows = scenarios.map((scn) => {
       const checked = selectedIds.includes(scn.id);
@@ -224,11 +245,12 @@ export function createScenariosView(opts) {
           h('div', {}, h('strong', {}, scn.label)),
           h('div', { class: 'muted small' }, metaLine(scn)),
         ),
-        h('button', { class: 'ghost', onclick: () => opts.onLoad(scn) }, 'Load'),
+        h('button', { class: 'ghost', onclick: () => { loadedScenarioId = scn.id; opts.onLoad(scn); render(); } }, 'Load'),
         h('button', { class: 'ghost', onclick: () => {
           if (!confirm(`Delete scenario "${scn.label}"?`)) return;
           scenarios = scenarios.filter((s2) => s2.id !== scn.id);
           selectedIds = selectedIds.filter((id) => id !== scn.id);
+          if (loadedScenarioId === scn.id) loadedScenarioId = null;
           persist();
           render();
         } }, 'Delete'),
@@ -236,8 +258,9 @@ export function createScenariosView(opts) {
     });
 
     const parts = [
-      h('p', { class: 'muted' }, 'Save the current accounts + assumptions as a named scenario, then select 2–4 to compare side by side. A saved scenario is frozen — editing your live accounts or assumptions afterward never changes it.'),
+      h('p', { class: 'muted' }, 'Save the current accounts + assumptions as a named scenario, then select 2–4 to compare side by side. A saved scenario is frozen — editing your live accounts or assumptions afterward never changes it, unless you Load it back and Update it.'),
       h('div', { class: 'toolbar' }, nameInput, saveBtn),
+      updateBox,
       scenarios.length
         ? h('div', { class: 'scenario-list' }, ...rows)
         : h('p', { class: 'muted small' }, 'No scenarios saved yet.'),
