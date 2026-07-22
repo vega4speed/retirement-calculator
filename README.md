@@ -94,7 +94,9 @@ dollars balance chart (each scenario keeps the same color for as long as it's pa
 comparison, even as you check/uncheck others) and a headline-readout table — does the money last,
 ending balance, lifetime tax, lifetime effective tax rate, the solved maximum sustainable spend
 when that strategy was used, and the assumptions that actually differ between them. "Load" puts a
-saved scenario back into the live editor to keep tweaking it.
+saved scenario back into the live editor to keep tweaking it — and once loaded, an "Update"
+button appears so a change you make actually gets saved back to that scenario, instead of only
+existing in the (also-persisted, but separate) live editor state.
 
 In progress: Roth conversions (the natural extension of the bracket-fill machinery) and
 couple/spousal Social Security.

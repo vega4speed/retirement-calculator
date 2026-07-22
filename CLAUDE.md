@@ -79,8 +79,13 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          a headline-readout table (lasts/runs-out, ending balance, lifetime tax,
                          lifetime effective tax rate, "Max sustainable spend" when either scenario
                          used that strategy, and the assumptions that differ). "Load"
-                         puts a saved scenario back into the live editor. Own localStorage key
-                         (`retirement-calc:scenarios:v1`), separate from the live editor's.
+                         puts a saved scenario back into the live editor; once loaded (or just
+                         saved), an "Update" affordance appears to overwrite that SAME scenario
+                         in place with further changes — tracks `loadedScenarioId` internally so
+                         "Save current as scenario" (always new) and "Update" (overwrite) are
+                         two distinct, clearly-labeled actions, not one button doing both. Own
+                         localStorage key (`retirement-calc:scenarios:v1`), separate from the
+                         live editor's.
                          NOTE: `schemas/scenario.schema.json` (Phase 0) is unused — its nested
                          shape predates how the live app's state actually evolved through
                          Phases 2-6; scenarios.js persists the app's real (flatter) state shape
