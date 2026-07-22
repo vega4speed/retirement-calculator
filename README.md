@@ -65,12 +65,18 @@ the conventional cash → taxable → tax-deferred → HSA → Roth sequence, "f
 bracket" draws tax-deferred money FIRST, up to the top of whichever ordinary-income bracket you
 pick, before touching taxable or Roth — a real retirement tax strategy (realize cheap ordinary
 income while you're in a low bracket, instead of letting it compound into bigger RMDs later).
-All charted in today's dollars with a retirement marker, a hover tooltip (now including age), and
-a table view — age per year, sticky column headers, and a clickable Tax cell that expands to show
-exactly how much fell in each ordinary/capital-gains bracket that year (the view now preserves
-your scroll position across these interactions instead of jumping to the top). In progress: Roth
-conversions (the natural extension of the bracket-fill machinery) and couple/spousal Social
-Security.
+All charted in today's dollars with a retirement marker, a hover tooltip (now including age and
+that year's effective tax rate), and a table view — age per year, sticky column headers, and a
+clickable Tax cell that expands to show exactly how much fell in each ordinary/capital-gains
+bracket that year, including what the standard deduction sheltered, plus a **marginal vs.
+effective tax rate** comparison (marginal = the rate on the last dollar; effective = total tax ÷
+total gross income — the number that actually shows whether a strategy is tax-efficient, since a
+strategy can raise lifetime tax in dollars while keeping the effective rate low by spreading
+income across more years). There's a lifetime version of that same rate as a stat tile, for
+comparing strategies at a glance. The view preserves your scroll position (both the page's and
+the table's own internal scroll) across these interactions instead of jumping to the top. In
+progress: Roth conversions (the natural extension of the bracket-fill machinery) and
+couple/spousal Social Security.
 
 Known simplifications, documented in the code: state tax is a flat rate (no state brackets);
 `otherIncome` (pension/rental placeholder) still isn't taxed — a deliberate v1 boundary, unlike

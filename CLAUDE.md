@@ -34,6 +34,9 @@ engine/               pure calculation modules (unit-tested)
                          claimingAge/earnings/careerStartYear and there's no benefit stream.
                          bracketFill is opt-in too: omit bracketFillRate (or select another
                          sequencing) and it behaves exactly like 'conventional'/'proportional'.
+                         Each decumulation year's totals now also carry grossIncome and
+                         effectiveTaxRate (tax ÷ gross income) — the number that actually shows
+                         whether a strategy is tax-efficient, distinct from the marginal rate.
   socialsecurity.js     earnings → AIME → PIA → claiming → COLA/haircut — DONE (implemented +
                          tested). fullRetirementAge() (1983-Amendments table), estimatePIA()
                          (bend-point formula on a "wage-indexed-equivalent" earnings setting —
@@ -51,19 +54,21 @@ ui/                   vanilla-JS UI (no framework, no deps)
   accounts-editor.js    enter/edit accounts, tax statuses, balances, cost basis
   setting-control.js    the reusable Simple/Expand knob (supports `perAccount:false` for
                          household-level settings like spending), with a live resolved preview
-  projection-view.js    stat tiles (incl. portfolio survival, lifetime tax) + the two-series
-                         chart (today's $ vs nominal, retirement marker, hover tooltip now shows
-                         age when known) + a table (both phases, sticky headers, an age column
-                         when birthYear is known, and a clickable Tax cell that expands a
-                         per-bracket breakdown row — the whole view now preserves scroll position
-                         across re-renders, so expanding a row deep in a long table doesn't jump
-                         you back to the top)
+  projection-view.js    stat tiles (incl. portfolio survival, lifetime tax, lifetime effective
+                         tax rate) + the two-series chart (today's $ vs nominal, retirement
+                         marker, hover tooltip shows age + that year's effective tax rate) + a
+                         table (both phases, sticky headers, an age column when birthYear is
+                         known, and a clickable Tax cell that expands a per-bracket breakdown row
+                         — now including what the standard deduction sheltered, plus a marginal-
+                         vs-effective-rate line — the whole view preserves scroll position, both
+                         the page's own AND the table's own internal scroll container, across
+                         re-renders)
   dom.js, formats.js    tiny DOM builder (incl. SVG) + value<->input formatting helpers
 data/                 tax-tables.json (verified 2025/2026 figures) + EXAMPLE templates
 schemas/              JSON Schemas for profile / snapshot / scenario
 test/                 node:test suites (smoke, resolver, accumulation, decumulation, tax,
                        decumulation-tax, socialsecurity, social-security-decumulation,
-                       bracket-fill) — 105 passing
+                       bracket-fill) — 107 passing
 ```
 
 ## Running
