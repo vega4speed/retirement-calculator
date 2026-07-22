@@ -363,6 +363,12 @@ export async function mount(root) {
   const body = h('div');
 
   function rebuild() {
+    // Most controls that affect other rows' hints/options (sequencing, career start year, birth
+    // year, filing status, ...) trigger this full rebuild rather than the lighter onEdit() path.
+    // Clearing and re-appending the whole body loses the browser's scroll anchoring the same way
+    // the projection view's own re-render did (see projection-view.js) — capture/restore around
+    // it so e.g. nudging a number input's spinner doesn't fling the page back to the top.
+    const scrollY = window.scrollY;
     acctAwareControls = [];
     const editor = createAccountsEditor({
       accounts: snapshot.accounts,
@@ -450,6 +456,7 @@ export async function mount(root) {
       ),
     );
     refreshProjection();
+    window.scrollTo(0, scrollY);
   }
 
   // --- init ----------------------------------------------------------------
