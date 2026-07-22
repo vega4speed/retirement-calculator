@@ -73,6 +73,21 @@ export function bracketBreakdown(amount, brackets, base = 0) {
   return rows;
 }
 
+/**
+ * The taxable-income ceiling ("top") of the bracket whose marginal rate is `rate` — the anchor
+ * for "fill withdrawals up to the top of the 22% bracket" style sequencing (design doc §5). No
+ * match (a rate that isn't one of this table's brackets) returns Infinity — an unconstrained fill,
+ * which project.js's caller then guards against by requiring the rate come from this same table.
+ * @param {number} rate
+ * @param {{upTo:number|null, rate:number}[]} brackets
+ * @returns {number}
+ */
+export function bracketTopForRate(rate, brackets) {
+  const b = brackets.find((x) => Math.abs(x.rate - rate) < 1e-9);
+  if (!b) return Infinity;
+  return b.upTo == null ? Infinity : b.upTo;
+}
+
 function scaleBrackets(brackets, factor) {
   return brackets.map((b) => ({ upTo: b.upTo == null ? null : b.upTo * factor, rate: b.rate }));
 }

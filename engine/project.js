@@ -21,7 +21,7 @@
 // See the design doc §4.1a for the full writeup.
 
 import { resolve } from './resolver.js';
-import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity, requiredBeginningAge, rmdAmount, cumulativeFactor } from './tax.js';
+import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity, requiredBeginningAge, rmdAmount, cumulativeFactor, bracketTopForRate } from './tax.js';
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from './socialsecurity.js';
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -140,11 +140,14 @@ const CONVENTIONAL_ORDER = ['cash', 'taxable', 'taxDeferred', 'hsa', 'roth'];
  * that's not a bug, it's the caller's cue to reinvest the surplus (see solveTaxYear).
  * @param {number} target
  * @param {{id:string, balance:number, taxStatus:string}[]} accounts
- * @param {'conventional'|'proportional'} sequencing
+ * @param {'conventional'|'proportional'|'bracketFill'} sequencing
  * @param {Record<string,number>} [floors]
+ * @param {{taxDeferredCeiling?:number}} [opts] `bracketFill` only: the dollar ceiling on total
+ *   tax-deferred withdrawals (floors included) that keeps ordinary income at or under the chosen
+ *   bracket's top (see solveTaxYear, which computes this from the tax tables).
  * @returns {{withdrawals:Record<string,number>, totalWithdrawn:number, shortfall:number}}
  */
-function sequenceWithdrawal(target, accounts, sequencing, floors = {}) {
+function sequenceWithdrawal(target, accounts, sequencing, floors = {}, opts = {}) {
   const withdrawals = Object.fromEntries(accounts.map((a) => [a.id, 0]));
   const remainingBalance = {};
   let floorsTotal = 0;
@@ -165,6 +168,51 @@ function sequenceWithdrawal(target, accounts, sequencing, floors = {}) {
           for (const a of accounts) withdrawals[a.id] += remainingBalance[a.id];
         } else {
           for (const a of accounts) withdrawals[a.id] += extraTarget * (remainingBalance[a.id] / total);
+        }
+      } else if (sequencing === 'bracketFill') {
+        // Design doc §5's "fill to the top of a bracket": draw tax-deferred FIRST (not last, as
+        // conventional order does), but only up to a dollar ceiling that keeps that year's
+        // ordinary income at or under a chosen bracket's top — deliberately realizing cheap
+        // ordinary income in low-income years rather than saving it all for RMDs later. Whatever
+        // the ceiling doesn't cover of the target falls back to conventional order over the
+        // remaining (non-tax-deferred) buckets; if even that runs out, the last resort is more
+        // tax-deferred beyond the ceiling — a real remaining need beats reporting a false shortfall.
+        let remaining = extraTarget;
+        const tdAccounts = accounts.filter((a) => a.taxStatus === 'taxDeferred');
+        const tdFloorTotal = tdAccounts.reduce((s, a) => s + withdrawals[a.id], 0);
+        let tdCapacity = Math.max(0, num(opts.taxDeferredCeiling) - tdFloorTotal);
+        for (const a of tdAccounts) {
+          if (remaining <= 0 || tdCapacity <= 0) break;
+          const take = Math.min(remainingBalance[a.id], remaining, tdCapacity);
+          withdrawals[a.id] += take;
+          remaining -= take;
+          tdCapacity -= take;
+          remainingBalance[a.id] -= take;
+        }
+        const byStatus = new Map();
+        for (const a of accounts) {
+          if (a.taxStatus === 'taxDeferred') continue;
+          if (!byStatus.has(a.taxStatus)) byStatus.set(a.taxStatus, []);
+          byStatus.get(a.taxStatus).push(a);
+        }
+        const restOrder = CONVENTIONAL_ORDER.filter((s) => s !== 'taxDeferred');
+        const order = [...restOrder, ...[...byStatus.keys()].filter((s) => !restOrder.includes(s))];
+        for (const status of order) {
+          for (const a of byStatus.get(status) || []) {
+            if (remaining <= 0) break;
+            const take = Math.min(remainingBalance[a.id], remaining);
+            withdrawals[a.id] += take;
+            remaining -= take;
+          }
+          if (remaining <= 0) break;
+        }
+        if (remaining > 0) {
+          for (const a of tdAccounts) {
+            if (remaining <= 0) break;
+            const take = Math.min(remainingBalance[a.id], remaining);
+            withdrawals[a.id] += take;
+            remaining -= take;
+          }
         }
       } else {
         const byStatus = new Map();
@@ -222,7 +270,7 @@ function pickReinvestmentTarget(accounts, fallbackId) {
  * @param {object} p
  * @param {number} p.targetNet   desired NET (after-tax) dollars to fund from the portfolio
  * @param {{id:string, balance:number, taxStatus:string, basisFraction?:number}[]} p.accounts
- * @param {'conventional'|'proportional'} p.sequencing
+ * @param {'conventional'|'proportional'|'bracketFill'} p.sequencing
  * @param {Record<string,number>} p.rmdFloors
  * @param {'mfj'|'single'|'hoh'} p.filingStatus
  * @param {number} p.age65Count
@@ -232,6 +280,9 @@ function pickReinvestmentTarget(accounts, fallbackId) {
  *   taxable portion (tax.taxableSocialSecurity) adds to ordinary taxable income. `otherIncome`
  *   is deliberately excluded from the provisional-income test — see project()'s docs.
  * @param {object} [p.fixedTables] tax-tables.json's `fixed` block; required if socialSecurityBenefit > 0
+ * @param {number} [p.bracketFillRate] `sequencing==='bracketFill'` only (design doc §5, Phase 6):
+ *   the marginal ordinary-income rate to fill up to (must match a rate in yearTable's ordinary
+ *   brackets, e.g. 0.12/0.22/0.24 — see tax.bracketTopForRate). Unset/no match ⇒ no ceiling.
  * @returns {{withdrawals:Record<string,number>, reinvestment:Record<string,number>, totalWithdrawn:number, tax:number, ordinaryTaxableIncome:number, capitalGain:number, taxableSocialSecurity:number, netAchieved:number, shortfall:number}}
  */
 function solveTaxYear(p) {
@@ -240,6 +291,13 @@ function solveTaxYear(p) {
   const ssBenefit = num(p.socialSecurityBenefit);
   const stdDeduction = standardDeduction({ filingStatus, age65Count: p.age65Count, yearTable });
   const totalAvailable = accounts.reduce((s, a) => s + Math.max(0, a.balance), 0);
+  // The bracket-fill ceiling is a taxable-income line; convert to a gross ordinary-withdrawal
+  // ceiling by adding back the standard deduction. Taxable SS also counts against the ceiling
+  // (it's ordinary income too) but depends circularly on what gets withdrawn — refined each
+  // round below from the PRIOR round's taxableSS, converging alongside the gross-up loop itself.
+  const bracketFillTop = p.sequencing === 'bracketFill' && p.bracketFillRate != null
+    ? bracketTopForRate(p.bracketFillRate, yearTable.ordinaryBrackets[filingStatus])
+    : Infinity;
 
   const taxFor = (withdrawals) => {
     let ordinaryWithdrawn = 0;
@@ -264,9 +322,12 @@ function solveTaxYear(p) {
   let last = null;
   let lastTotalWithdrawn = -1;
   let exhausted = false; // true only when the LAST round hit the portfolio's total balance cap
+  let taxableSSEstimate = 0;
   for (let i = 0; i < 8; i++) {
-    const { withdrawals, totalWithdrawn } = sequenceWithdrawal(grossGuess, accounts, sequencing, rmdFloors);
+    const taxDeferredCeiling = Math.max(0, bracketFillTop + stdDeduction - taxableSSEstimate);
+    const { withdrawals, totalWithdrawn } = sequenceWithdrawal(grossGuess, accounts, sequencing, rmdFloors, { taxDeferredCeiling });
     const { ordinaryTaxableIncome, gain, taxableSS, tax } = taxFor(withdrawals);
+    taxableSSEstimate = taxableSS;
     const netAchieved = totalWithdrawn - tax;
     last = { withdrawals, totalWithdrawn, tax, ordinaryTaxableIncome, gain, taxableSS, netAchieved };
     exhausted = totalWithdrawn >= totalAvailable - 1e-6;
@@ -352,7 +413,12 @@ function solveTaxYear(p) {
  * @param {object} [p.otherIncome] setting, today's-dollars annual amount (per year); default 0
  * @param {object} [p.withdrawalPercent] setting (per year); default 0.04
  * @param {'fixedReal'|'fixedPercent'} [p.strategy] default 'fixedReal'
- * @param {'conventional'|'proportional'} [p.sequencing] default 'conventional'
+ * @param {'conventional'|'proportional'|'bracketFill'} [p.sequencing] default 'conventional'.
+ *   `bracketFill` requires tax mode (below) — it needs real brackets to fill.
+ * @param {number} [p.bracketFillRate] `sequencing==='bracketFill'` only: the marginal ordinary
+ *   rate to fill tax-deferred withdrawals up to each year (design doc §5, Phase 6) — e.g. 0.12
+ *   fills the 12% bracket before touching taxable/Roth. Must match a rate in the resolved year's
+ *   ordinary brackets; see tax.bracketTopForRate.
  * @param {number} [p.startCumulativeInflation] cumulative inflation already elapsed before
  *   startYear (carried over from accumulation so today's-dollars stays relative to one base
  *   year across the whole plan); default 1
@@ -459,6 +525,7 @@ export function projectDecumulation(p) {
         filingStatus: p.filingStatus, age65Count: age != null && age >= 65 ? 1 : 0,
         yearTable, stateTaxRate: p.stateTaxRate,
         socialSecurityBenefit: ssBenefitNominal, fixedTables: p.taxTables.fixed,
+        bracketFillRate: p.bracketFillRate,
       });
       withdrawals = solved.withdrawals; reinvestment = solved.reinvestment; shortfall = solved.shortfall;
       tax = solved.tax; ordinaryTaxableIncome = solved.ordinaryTaxableIncome; capitalGain = solved.capitalGain;
@@ -540,7 +607,8 @@ export function projectDecumulation(p) {
  * @param {object} [p.otherIncome]    decumulation only
  * @param {object} [p.withdrawalPercent] decumulation only
  * @param {'fixedReal'|'fixedPercent'} [p.strategy] decumulation only
- * @param {'conventional'|'proportional'} [p.sequencing] decumulation only
+ * @param {'conventional'|'proportional'|'bracketFill'} [p.sequencing] decumulation only
+ * @param {number} [p.bracketFillRate] `sequencing==='bracketFill'` only (Phase 6, design doc §5)
  * @param {'mfj'|'single'|'hoh'} [p.filingStatus] enables Phase 4 tax-aware decumulation
  * @param {object} [p.taxTables] parsed tax-tables.json
  * @param {number} [p.anchorYear] required if taxTables given
@@ -608,7 +676,7 @@ export function project(p) {
       startYear: retirementYear + 1, endYear: horizonYear, accounts: decStartAccounts,
       returnRate: p.returnRate, inflation: p.inflation,
       spending: p.spending, otherIncome: p.otherIncome, withdrawalPercent: p.withdrawalPercent,
-      strategy: p.strategy, sequencing: p.sequencing,
+      strategy: p.strategy, sequencing: p.sequencing, bracketFillRate: p.bracketFillRate,
       startCumulativeInflation: lastAccRow.cumulativeInflation,
       filingStatus: p.filingStatus, taxTables: p.taxTables, anchorYear: p.anchorYear,
       bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,

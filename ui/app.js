@@ -78,7 +78,8 @@ export async function mount(root) {
     retirementYear: baseYear() + 25,
     horizonYear: baseYear() + 55,
     strategy: 'fixedReal',       // 'fixedReal' | 'fixedPercent'
-    sequencing: 'conventional',  // 'conventional' | 'proportional'
+    sequencing: 'conventional',  // 'conventional' | 'proportional' | 'bracketFill'
+    bracketFillRate: 0.12,       // 'bracketFill' only: which ordinary bracket to fill up to
   };
 
   const acctSummary = () => snapshot.accounts.map((a) => ({ id: a.id, label: a.label || a.id }));
@@ -145,6 +146,7 @@ export async function mount(root) {
     plan.horizonYear = baseYear() + 55;
     plan.strategy = 'fixedReal';
     plan.sequencing = 'conventional';
+    plan.bracketFillRate = 0.12;
     rebuild();
   }
 
@@ -182,6 +184,7 @@ export async function mount(root) {
       withdrawalPercent: assumptions.withdrawalPercent,
       strategy: plan.strategy,
       sequencing: plan.sequencing,
+      bracketFillRate: plan.sequencing === 'bracketFill' ? plan.bracketFillRate : undefined,
       // birthYear is passed unconditionally — it drives the table's age column even when tax
       // tables didn't load (age display doesn't depend on tax being computed).
       birthYear: Number.isFinite(filing.birthYear) ? filing.birthYear : undefined,
@@ -328,6 +331,27 @@ export async function mount(root) {
     ));
   }
 
+  // Rates offered for "fill to the top of a bracket" — the current filing status's own ordinary
+  // brackets (anchor year), so the picker always matches what the engine can actually find via
+  // tax.bracketTopForRate. Excludes the uncapped top bracket (filling "to the top" of it is the
+  // same as no ceiling at all — not a meaningful choice).
+  function bracketFillOptions() {
+    if (!taxTables) return [];
+    const yearTable = resolveYearTable({ tables: taxTables, year: TAX_ANCHOR_YEAR, anchorYear: TAX_ANCHOR_YEAR });
+    return yearTable.ordinaryBrackets[filing.filingStatus]
+      .filter((b) => b.upTo != null)
+      .map((b) => b.rate);
+  }
+
+  function bracketFillRateRow() {
+    const rates = bracketFillOptions();
+    if (!rates.length) return null;
+    if (!rates.includes(plan.bracketFillRate)) plan.bracketFillRate = rates[0];
+    return selectRow('Fill up to bracket', String(plan.bracketFillRate),
+      rates.map((r) => [String(r), `${(r * 100).toFixed(0)}%`]),
+      (v) => { plan.bracketFillRate = Number(v); });
+  }
+
   function selectRow(label, value, options, onSet) {
     const select = h('select', {
       onchange: (e) => { onSet(e.target.value); onEdit(); rebuild(); },
@@ -390,7 +414,14 @@ export async function mount(root) {
         selectRow('Withdrawal order', plan.sequencing, [
           ['conventional', 'Conventional (cash → taxable → tax-deferred → HSA → Roth)'],
           ['proportional', 'Proportional (spread across all accounts)'],
+          ...(taxTables ? [['bracketFill', 'Tax-bracket-aware (fill tax-deferred to the top of a bracket first)']] : []),
         ], (v) => { plan.sequencing = v; }),
+        plan.sequencing === 'bracketFill'
+          ? h('div', {},
+              bracketFillRateRow(),
+              h('p', { class: 'muted small' }, 'Each year, withdraws from tax-deferred accounts up to the top of this ordinary-income bracket before touching taxable or Roth — deliberately realizing cheap ordinary income in low-income years instead of saving it all for RMDs. RMDs, when forced, still come first and count against this ceiling.'),
+            )
+          : null,
       ),
       section('5 · Social Security',
         taxTables

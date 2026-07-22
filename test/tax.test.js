@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import {
   bracketTax,
   bracketBreakdown,
+  bracketTopForRate,
   resolveYearTable,
   ordinaryTax,
   standardDeduction,
@@ -159,4 +160,19 @@ test('bracketBreakdown with a base offset matches the capital-gains stacking tes
   ]);
   const sum = rows.reduce((s, r) => s + r.tax, 0);
   approx(sum, capitalGainsTax(100000, 50000, 'mfj', t2026));
+});
+
+test('bracketTopForRate: finds the ceiling of a matching bracket (real 2026 single table)', () => {
+  const t2026 = resolveYearTable({ tables: realTables, year: 2026, anchorYear: 2026 });
+  approx(bracketTopForRate(0.12, t2026.ordinaryBrackets.single), 50400);
+  approx(bracketTopForRate(0.22, t2026.ordinaryBrackets.single), 105700);
+});
+
+test('bracketTopForRate: the top (uncapped) bracket has no ceiling', () => {
+  const t2026 = resolveYearTable({ tables: realTables, year: 2026, anchorYear: 2026 });
+  assert.equal(bracketTopForRate(0.37, t2026.ordinaryBrackets.single), Infinity);
+});
+
+test('bracketTopForRate: a rate that matches no bracket is unconstrained', () => {
+  assert.equal(bracketTopForRate(0.99, BRACKETS), Infinity);
 });

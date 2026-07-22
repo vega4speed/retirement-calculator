@@ -152,8 +152,9 @@ function buildChart(result) {
     dotN.setAttribute('cx', x); dotN.setAttribute('cy', yScale(r.totals.endBalance)); dotN.setAttribute('visibility', 'visible');
     dotR.setAttribute('cx', x); dotR.setAttribute('cy', yScale(r.real.endBalance)); dotR.setAttribute('visibility', 'visible');
     clear(tip);
+    const ageText = r.age != null ? ` · age ${r.age}` : '';
     const lines = [
-      h('div', { class: 'tip-year' }, `${r.year} · ${r.phase === 'decumulation' ? 'retired' : 'working'}`),
+      h('div', { class: 'tip-year' }, `${r.year}${ageText} · ${r.phase === 'decumulation' ? 'retired' : 'working'}`),
       h('div', {}, h('span', { class: 'sw', style: { background: COL.real } }), `Today's: ${usdFull(r.real.endBalance)}`),
       h('div', {}, h('span', { class: 'sw', style: { background: COL.nominal } }), `Nominal: ${usdFull(r.totals.endBalance)}`),
     ];
@@ -261,8 +262,13 @@ export function createProjectionView(opts = {}) {
   let current = null;
 
   function render() {
+    // A toggle (Show table / expand a Tax cell) fully rebuilds this view's DOM. Clearing and
+    // re-appending a large subtree loses the browser's scroll anchoring, so it silently snaps
+    // the page to the top — jarring when you're clicking a link deep in a long table. Capture
+    // and restore the scroll position around the rebuild so it's a no-op to the user.
+    const scrollY = window.scrollY;
     clear(el);
-    if (!current) { el.append(h('p', { class: 'muted' }, 'Add at least one account to see a projection.')); return; }
+    if (!current) { el.append(h('p', { class: 'muted' }, 'Add at least one account to see a projection.')); window.scrollTo(0, scrollY); return; }
     const r = current;
     const startTotal = r.years[0].totals.endBalance;
     const retRow = r.years.find((y) => y.year === r.retirementYear) || r.years[0];
@@ -293,6 +299,7 @@ export function createProjectionView(opts = {}) {
       }));
     }
     el.append(...parts);
+    window.scrollTo(0, scrollY);
   }
 
   return {

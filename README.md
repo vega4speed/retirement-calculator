@@ -39,8 +39,9 @@ engine/             pure calculation modules (no DOM, no I/O) — unit-tested
   project.js          accumulation + decumulation projection, tax-aware, incl. Social
                        Security's income/taxation (done + tested)
   socialsecurity.js   earnings → AIME → PIA → claiming, COLA, solvency haircut (done + tested)
-  strategies.js       superseded by project.js's built-in sequencing; revisit for
-                       Phase 6 (bracket-fill withdrawals, Roth conversions)
+  strategies.js       superseded by project.js's built-in sequencing (now incl.
+                       bracketFill, Phase 6); Roth conversions remain the natural
+                       extension of the same machinery
 ui/                 vanilla-JS UI (accounts, Simple/Expand controls, projection chart)
 data/               tax-tables.json + example profile/snapshot/scenario templates
 schemas/            JSON Schemas for profile / snapshot / scenario
@@ -59,11 +60,17 @@ number, via the real bend-point PIA formula, so "work N more years" or "claim ea
 the estimate. Includes claiming-age adjustment (early reduction / delayed credits, capped at 70),
 COLA, a solvency-haircut lever (the OASI trust fund's own ~77%-payable-if-depleted projection),
 and real taxation of the benefit (the provisional-income formula) that composes into the same
-gross-up as everything else. All charted in today's dollars with a retirement marker, hover
-crosshair, and a table view — age per year, sticky column headers, and a clickable Tax cell that
-expands to show exactly how much fell in each ordinary/capital-gains bracket that year. In
-progress: tax-bracket-aware withdrawal sequencing (Roth conversions, "fill to the top of a
-bracket") and couple/spousal Social Security.
+gross-up as everything else. There's also a **tax-bracket-aware withdrawal order**: instead of
+the conventional cash → taxable → tax-deferred → HSA → Roth sequence, "fill to the top of a
+bracket" draws tax-deferred money FIRST, up to the top of whichever ordinary-income bracket you
+pick, before touching taxable or Roth — a real retirement tax strategy (realize cheap ordinary
+income while you're in a low bracket, instead of letting it compound into bigger RMDs later).
+All charted in today's dollars with a retirement marker, a hover tooltip (now including age), and
+a table view — age per year, sticky column headers, and a clickable Tax cell that expands to show
+exactly how much fell in each ordinary/capital-gains bracket that year (the view now preserves
+your scroll position across these interactions instead of jumping to the top). In progress: Roth
+conversions (the natural extension of the bracket-fill machinery) and couple/spousal Social
+Security.
 
 Known simplifications, documented in the code: state tax is a flat rate (no state brackets);
 `otherIncome` (pension/rental placeholder) still isn't taxed — a deliberate v1 boundary, unlike
