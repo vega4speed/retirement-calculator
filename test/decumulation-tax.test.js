@@ -177,3 +177,20 @@ test('project(): full pipeline with tax enabled — cost basis carries through a
   approx(y2027.totals.tax, 0, 1e-6);
   approx(y2027.totals.netSpendable, 20000, 1e-6);
 });
+
+test('project(): lifetime aggregates equal the sum of the per-year totals they aggregate', () => {
+  const r = project({
+    baseYear: 2026, retirementYear: 2026, horizonYear: 2030,
+    accounts: [{ id: 'ira', balance: 1000000, taxStatus: 'taxDeferred' }],
+    returnRate: { default: 0.04 }, contributions: { default: 0 }, wageGrowth: { default: 0 },
+    inflation: { default: 0.02 }, spending: { default: 60000 }, sequencing: 'conventional',
+    filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0.02 }, standardDeductionIndexingRate: { default: 0.02 },
+  });
+  const sumTax = r.years.reduce((s, y) => s + (y.totals.tax || 0), 0);
+  const sumGross = r.years.reduce((s, y) => s + (y.totals.grossIncome || 0), 0);
+  approx(r.lifetimeTax, sumTax, 1e-6);
+  approx(r.lifetimeGrossIncome, sumGross, 1e-6);
+  approx(r.lifetimeEffectiveTaxRate, sumTax / sumGross, 1e-9);
+  approx(r.lifetimeRothConversions, 0, 1e-6); // no conversions in this scenario
+});

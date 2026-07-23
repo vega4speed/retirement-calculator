@@ -157,20 +157,13 @@ function buildComparisonTable(entries) {
     ...(anySolved ? [['Max sustainable spend · today\'s $', (e) =>
       h('td', { class: 'r' }, e.result.solvedSpending != null ? usdFull(e.result.solvedSpending) : '—')]] : []),
     ["Ending balance · today's $", (e) => h('td', { class: 'r' }, usdFull(e.result.years[e.result.years.length - 1].real.endBalance))],
-    ['Lifetime tax (nominal)', (e) => {
-      const t = e.result.years.reduce((sn, y) => sn + (y.totals.tax || 0), 0);
-      return h('td', { class: 'r' }, t > 0 ? usdFull(t) : '—');
-    }],
-    ['Lifetime effective tax rate', (e) => {
-      const t = e.result.years.reduce((sn, y) => sn + (y.totals.tax || 0), 0);
-      const g = e.result.years.reduce((sn, y) => sn + (y.totals.grossIncome || 0), 0);
-      return h('td', { class: 'r' }, g > 0 ? `${((t / g) * 100).toFixed(1)}%` : '—');
-    }],
+    // Lifetime tax/effective-rate/conversions come straight from project()'s own aggregates (see
+    // its docs) — the same fields projection-view.js's stat tiles use, guaranteed consistent.
+    ['Lifetime tax (nominal)', (e) => h('td', { class: 'r' }, e.result.lifetimeTax > 0 ? usdFull(e.result.lifetimeTax) : '—')],
+    ['Lifetime effective tax rate', (e) => h('td', { class: 'r' }, e.result.lifetimeGrossIncome > 0 ? `${(e.result.lifetimeEffectiveTaxRate * 100).toFixed(1)}%` : '—')],
     ...(entries.some((e) => e.scn.plan?.rothConversionsEnabled)
-      ? [['Converted to Roth (lifetime)', (e) => {
-          const c = e.result.years.reduce((sn, y) => sn + (y.totals.conversion || 0), 0);
-          return h('td', { class: 'r' }, c > 0 ? usdFull(c) : '—');
-        }]]
+      ? [['Converted to Roth (lifetime)', (e) =>
+          h('td', { class: 'r' }, e.result.lifetimeRothConversions > 0 ? usdFull(e.result.lifetimeRothConversions) : '—')]]
       : []),
     ['Retirement year', (e) => h('td', { class: 'r' }, e.result.retirementYear)],
     ['Withdrawal strategy', (e) => h('td', {}, STRATEGY_LABEL[e.scn.plan?.strategy] ?? e.scn.plan?.strategy ?? '—')],

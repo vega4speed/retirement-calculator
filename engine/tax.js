@@ -88,6 +88,23 @@ export function bracketTopForRate(rate, brackets) {
   return b.upTo == null ? Infinity : b.upTo;
 }
 
+/**
+ * The MARGINAL rate on the next dollar at a given taxable-income level — the inverse of
+ * bracketTopForRate (rate -> threshold instead of threshold -> rate). Used for "what's my
+ * current tax bracket" readouts, distinct from the EFFECTIVE rate (total tax / total income;
+ * see project.js's totals.effectiveTaxRate) which is what you're actually paying on average.
+ * @param {number} taxableIncome
+ * @param {{upTo:number|null, rate:number}[]} brackets
+ * @returns {number}
+ */
+export function marginalRateForIncome(taxableIncome, brackets) {
+  const income = Math.max(0, num(taxableIncome));
+  for (const b of brackets) {
+    if (b.upTo == null || income <= b.upTo) return b.rate;
+  }
+  return brackets[brackets.length - 1]?.rate ?? 0;
+}
+
 function scaleBrackets(brackets, factor) {
   return brackets.map((b) => ({ upTo: b.upTo == null ? null : b.upTo * factor, rate: b.rate }));
 }

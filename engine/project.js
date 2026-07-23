@@ -778,7 +778,18 @@ export function project(p) {
     ...decYears.map((y) => withAge({ ...y, phase: 'decumulation' })),
   ];
 
-  return { baseYear, retirementYear, horizonYear, years, firstDepletionYear };
+  // Lifetime aggregates, computed once here rather than re-derived by every UI consumer (the
+  // projection view's stat tiles, the scenario-comparison table, and — Phase 6.5 — the
+  // traditional-vs-Roth readout all need the same "total tax paid" / "total gross income" sums).
+  const lifetimeTax = years.reduce((s, y) => s + (y.totals.tax || 0), 0);
+  const lifetimeGrossIncome = years.reduce((s, y) => s + (y.totals.grossIncome || 0), 0);
+  const lifetimeEffectiveTaxRate = lifetimeGrossIncome > 0 ? lifetimeTax / lifetimeGrossIncome : 0;
+  const lifetimeRothConversions = years.reduce((s, y) => s + (y.totals.conversion || 0), 0);
+
+  return {
+    baseYear, retirementYear, horizonYear, years, firstDepletionYear,
+    lifetimeTax, lifetimeGrossIncome, lifetimeEffectiveTaxRate, lifetimeRothConversions,
+  };
 }
 
 /**

@@ -12,10 +12,12 @@ import { h, clear, download } from './dom.js';
 import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
-import { resolveYearTable, bracketBreakdown, standardDeduction } from '../engine/tax.js';
+import { resolve } from '../engine/resolver.js';
+import { resolveYearTable, bracketBreakdown, standardDeduction, ordinaryTax, marginalRateForIncome } from '../engine/tax.js';
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from '../engine/socialsecurity.js';
 import { projectFor, TAX_ANCHOR_YEAR } from './project-adapter.js';
 import { createScenariosView } from './scenarios.js';
+import { usd as usdShort } from './chart-utils.js';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const STORAGE_KEY = 'retirement-calc:v1';
@@ -123,6 +125,30 @@ export async function mount(root) {
     } catch { return null; }
   }
 
+  // A single point-in-time snapshot of TODAY's tax situation — not a multi-year projection.
+  // Reuses the SAME `earnings` setting Social Security draws on (resolved for the current/base
+  // year), since asking for the same real-world income twice in two different inputs would be
+  // confusing and error-prone. This deliberately does NOT model income growth or a year-by-year
+  // pre-retirement tax ledger — the standard financial-planning heuristic for traditional-vs-Roth
+  // is "compare your current marginal rate to your expected retirement rate," which only needs
+  // one snapshot on each side, not a full trajectory.
+  function currentTaxSnapshot() {
+    if (!taxTables) return null;
+    const year = baseYear();
+    const income = Number(resolve(assumptions.earnings, { year })) || 0;
+    const yearTable = resolveYearTable({
+      tables: taxTables, year, anchorYear: TAX_ANCHOR_YEAR,
+      bracketIndexingRate: assumptions.inflation, standardDeductionIndexingRate: assumptions.inflation,
+    });
+    const age65Count = Number.isFinite(filing.birthYear) && (year - filing.birthYear) >= 65 ? 1 : 0;
+    const stdDeductionAmt = standardDeduction({ filingStatus: filing.filingStatus, age65Count, yearTable });
+    const taxableIncome = Math.max(0, income - stdDeductionAmt);
+    const tax = ordinaryTax(taxableIncome, filing.filingStatus, yearTable);
+    const marginalRate = marginalRateForIncome(taxableIncome, yearTable.ordinaryBrackets[filing.filingStatus]);
+    const effectiveRate = income > 0 ? tax / income : 0;
+    return { year, income, tax, marginalRate, effectiveRate };
+  }
+
   const projectionView = createProjectionView({ bracketBreakdownFor });
 
   // Loads a saved scenario BACK into the live editor (overwriting it — the scenario itself stays
@@ -198,6 +224,7 @@ export async function mount(root) {
     if (r) projectionView.render(r); else projectionView.clearView();
     updateMaxSustainableReadout(r);
     updateSocialSecurityReadout();
+    updateTaxComparisonReadout(r);
   }
 
   // --- helpers -------------------------------------------------------------
@@ -381,6 +408,40 @@ export async function mount(root) {
     ));
   }
 
+  // Traditional-vs-Roth guidance: compares TODAY's marginal tax rate (currentTaxSnapshot(), a
+  // snapshot) against the PROJECTED retirement lifetime effective rate (r.lifetimeEffectiveTaxRate,
+  // from the same project() call the chart/table use) — the standard heuristic for whether
+  // tax-deferred or Roth contributions are more tax-efficient for you. Persistent element updated
+  // from refreshProjection(), same shape/reason as ssEstimateBox and maxSustainableBox above.
+  const taxComparisonBox = h('div');
+  function updateTaxComparisonReadout(r) {
+    clear(taxComparisonBox);
+    const snap = currentTaxSnapshot();
+    if (!snap || snap.income <= 0) return;
+    if (!r || !(r.lifetimeGrossIncome > 0)) {
+      taxComparisonBox.append(h('div', { class: 'ss-estimate' },
+        h('strong', {}, `Current marginal tax rate: ${(snap.marginalRate * 100).toFixed(0)}%`),
+        ` (effective ${(snap.effectiveRate * 100).toFixed(1)}%) on ${usdShort(snap.income)} income in ${snap.year}.`,
+        h('div', { class: 'muted small' }, 'Add accounts and a spending plan below to compare this against your projected retirement tax rate.'),
+      ));
+      return;
+    }
+    const retirementRate = r.lifetimeEffectiveTaxRate;
+    const diff = snap.marginalRate - retirementRate;
+    const verdict = Math.abs(diff) < 0.02
+      ? "roughly a wash — Traditional and Roth are close to equivalent for you at these rates"
+      : diff > 0
+        ? 'Traditional (tax-deferred) contributions are likely more tax-efficient — you\'d defer tax at a higher rate now and pay it later at a lower one'
+        : 'Roth contributions are likely more tax-efficient — you\'d pay tax now at a lower rate than you\'re projected to face in retirement';
+    taxComparisonBox.append(h('div', { class: 'ss-estimate' },
+      h('strong', {}, `Current marginal tax rate: ${(snap.marginalRate * 100).toFixed(0)}%`),
+      ` (effective ${(snap.effectiveRate * 100).toFixed(1)}%) on ${usdShort(snap.income)} income in ${snap.year}, vs. a projected `,
+      h('strong', {}, `${(retirementRate * 100).toFixed(1)}% lifetime effective rate`),
+      ' in retirement.',
+      h('div', { class: 'muted small' }, `→ ${verdict}. This compares your current marginal rate to retirement's overall EFFECTIVE rate — the two aren't quite the same kind of number, but it's the standard comparison for this decision; a rough guide, not a precise optimum.`),
+    ));
+  }
+
   function selectRow(label, value, options, onSet) {
     const select = h('select', {
       onchange: (e) => { onSet(e.target.value); onEdit(); rebuild(); },
@@ -445,6 +506,8 @@ export async function mount(root) {
         settingRow('contributions', 'Annual contribution', 'money', true),
         settingRow('inflation', 'Inflation', 'percent', false),
         settingRow('wageGrowth', 'Wage growth', 'percent', false),
+        h('p', { class: 'muted small' }, 'Current tax rate, and whether traditional or Roth contributions make more sense for you — based on the "Annual earnings" figure in the Social Security section below (the same real income, used once).'),
+        taxComparisonBox,
       ),
       section('4 · Retirement spending',
         h('p', { class: 'muted' }, 'Withdrawals are drawn from your accounts in the order below, grossed up to net your spending target after tax (Phase 4). RMDs are forced once you reach the required age.'),

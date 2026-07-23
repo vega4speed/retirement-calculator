@@ -275,16 +275,10 @@ export function createProjectionView(opts = {}) {
     const retRow = r.years.find((y) => y.year === r.retirementYear) || r.years[0];
     const endRow = r.years[r.years.length - 1];
     const contributed = r.years.reduce((sn, y) => sn + (y.totals.contribution || 0), 0);
-    const lifetimeTax = r.years.reduce((sn, y) => sn + (y.totals.tax || 0), 0);
-    const lifetimeConversions = r.years.reduce((sn, y) => sn + (y.totals.conversion || 0), 0);
-    const lifetimeGrossIncome = r.years.reduce((sn, y) => sn + (y.totals.grossIncome || 0), 0);
-    // Lifetime EFFECTIVE rate: total tax ÷ total gross retirement income, summed across years
-    // (not an average of the per-year rates, which would over-weight small-income years). This
-    // is the number that answers "is a strategy actually tax-efficient" — e.g. bracket-fill
-    // sequencing can raise lifetime tax in dollars (it deliberately realizes more ordinary income
-    // sooner) while still keeping this rate low, because it's spread across many low-bracket
-    // years instead of compressed into fewer years once RMDs force it.
-    const lifetimeEffectiveRate = lifetimeGrossIncome > 0 ? lifetimeTax / lifetimeGrossIncome : 0;
+    // Lifetime tax/effective-rate/conversions are computed ONCE in project() (see its docs) and
+    // reused here rather than re-derived — the scenario-comparison table (scenarios.js) uses the
+    // exact same fields, so both are guaranteed consistent by construction, not by convention.
+    const { lifetimeTax, lifetimeEffectiveTaxRate: lifetimeEffectiveRate, lifetimeRothConversions: lifetimeConversions } = r;
     const growth = retRow.totals.endBalance - startTotal - contributed;
     const yrs = r.retirementYear - r.baseYear;
 

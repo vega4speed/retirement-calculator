@@ -9,6 +9,7 @@ import {
   bracketTax,
   bracketBreakdown,
   bracketTopForRate,
+  marginalRateForIncome,
   resolveYearTable,
   ordinaryTax,
   standardDeduction,
@@ -175,4 +176,21 @@ test('bracketTopForRate: the top (uncapped) bracket has no ceiling', () => {
 
 test('bracketTopForRate: a rate that matches no bracket is unconstrained', () => {
   assert.equal(bracketTopForRate(0.99, BRACKETS), Infinity);
+});
+
+test('marginalRateForIncome: inverse of bracketTopForRate (real 2026 single table)', () => {
+  const t2026 = resolveYearTable({ tables: realTables, year: 2026, anchorYear: 2026 });
+  const single = t2026.ordinaryBrackets.single;
+  approx(marginalRateForIncome(5000, single), 0.10);
+  approx(marginalRateForIncome(12400, single), 0.10); // exactly at the boundary -> still 10%
+  approx(marginalRateForIncome(12401, single), 0.12);
+  approx(marginalRateForIncome(50400, single), 0.12);
+  approx(marginalRateForIncome(105700, single), 0.22);
+  approx(marginalRateForIncome(10000000, single), 0.37); // deep into the uncapped top bracket
+});
+
+test('marginalRateForIncome: zero or negative income is the bottom bracket\'s rate', () => {
+  const t2026 = resolveYearTable({ tables: realTables, year: 2026, anchorYear: 2026 });
+  approx(marginalRateForIncome(0, t2026.ordinaryBrackets.single), 0.10);
+  approx(marginalRateForIncome(-500, t2026.ordinaryBrackets.single), 0.10);
 });
