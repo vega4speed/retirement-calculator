@@ -166,6 +166,12 @@ function buildComparisonTable(entries) {
       const g = e.result.years.reduce((sn, y) => sn + (y.totals.grossIncome || 0), 0);
       return h('td', { class: 'r' }, g > 0 ? `${((t / g) * 100).toFixed(1)}%` : '—');
     }],
+    ...(entries.some((e) => e.scn.plan?.rothConversionsEnabled)
+      ? [['Converted to Roth (lifetime)', (e) => {
+          const c = e.result.years.reduce((sn, y) => sn + (y.totals.conversion || 0), 0);
+          return h('td', { class: 'r' }, c > 0 ? usdFull(c) : '—');
+        }]]
+      : []),
     ['Retirement year', (e) => h('td', { class: 'r' }, e.result.retirementYear)],
     ['Withdrawal strategy', (e) => h('td', {}, STRATEGY_LABEL[e.scn.plan?.strategy] ?? e.scn.plan?.strategy ?? '—')],
     ['Withdrawal order', (e) => h('td', {}, SEQUENCING_LABEL[e.scn.plan?.sequencing] ?? e.scn.plan?.sequencing ?? '—')],

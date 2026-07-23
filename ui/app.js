@@ -77,6 +77,7 @@ export async function mount(root) {
     strategy: 'fixedReal',       // 'fixedReal' | 'fixedPercent' | 'maxSustainable'
     sequencing: 'conventional',  // 'conventional' | 'proportional' | 'bracketFill'
     bracketFillRate: 0.12,       // 'bracketFill' only: which ordinary bracket to fill up to
+    rothConversionsEnabled: false, // 'bracketFill' only: also convert unused room to Roth
   };
 
   const acctSummary = () => snapshot.accounts.map((a) => ({ id: a.id, label: a.label || a.id }));
@@ -171,6 +172,7 @@ export async function mount(root) {
     plan.strategy = 'fixedReal';
     plan.sequencing = 'conventional';
     plan.bracketFillRate = 0.12;
+    plan.rothConversionsEnabled = false;
     rebuild();
   }
 
@@ -386,6 +388,17 @@ export async function mount(root) {
     return h('div', { class: 'setting' }, h('div', { class: 'setting-head' }, h('label', { class: 'setting-label' }, label), select));
   }
 
+  function checkboxRow(label, checked, onSet, hint) {
+    const checkbox = h('input', {
+      type: 'checkbox', checked,
+      onchange: (e) => { onSet(e.target.checked); onEdit(); rebuild(); },
+    });
+    return h('div', { class: 'setting' }, h('div', { class: 'setting-head' },
+      h('label', { class: 'setting-label checkbox-label' }, checkbox, ' ', label),
+      hint ? h('span', { class: 'muted small' }, hint) : null,
+    ));
+  }
+
   // --- view ----------------------------------------------------------------
   const body = h('div');
 
@@ -456,6 +469,9 @@ export async function mount(root) {
           ? h('div', {},
               bracketFillRateRow(),
               h('p', { class: 'muted small' }, 'Each year, withdraws from tax-deferred accounts up to the top of this ordinary-income bracket before touching taxable or Roth — deliberately realizing cheap ordinary income in low-income years instead of saving it all for RMDs. RMDs, when forced, still come first and count against this ceiling.'),
+              checkboxRow('Also convert unused bracket room to Roth', plan.rothConversionsEnabled,
+                (v) => { plan.rothConversionsEnabled = v; }),
+              h('p', { class: 'muted small' }, "Roth conversions (design doc §5): in the gap years before you're forced to take RMDs, whatever room is left in the bracket above after covering your spending gets converted from tax-deferred to Roth instead of sitting unused — paying tax on it now, at today's (possibly lower) rate, so it shrinks future RMDs and grows tax-free forever after. The conversion is preserved in full; its own tax is paid from other accounts (via the withdrawal order above), not carved out of the converted amount. This raises this year's tax bill on purpose — see the Lifetime tax stat and the per-year breakdown below to judge the tradeoff."),
             )
           : null,
       ),

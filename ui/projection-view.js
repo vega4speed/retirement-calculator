@@ -133,6 +133,7 @@ function buildChart(result) {
         lines.push(h('div', { class: 'tip-sub' }, `− ${usdFull(r.totals.tax)} tax${effRate} → ${usdFull(r.totals.netSpendable)} net`));
       }
       if (r.totals.reinvestment) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.reinvestment)} RMD surplus reinvested`));
+      if (r.totals.conversion) lines.push(h('div', { class: 'tip-sub' }, `↷ ${usdFull(r.totals.conversion)} converted to Roth`));
       if (r.totals.shortfall > 1e-6) lines.push(h('div', { class: 'tip-sub', style: { color: COL.critical } }, `Shortfall: ${usdFull(r.totals.shortfall)}`));
     }
     tip.append(...lines);
@@ -200,8 +201,9 @@ function buildTable(result, opts = {}) {
   const rows = result.years;
   const hasTax = rows.some((r) => r.totals.tax);
   const hasAge = rows.some((r) => r.age != null);
+  const hasConversion = rows.some((r) => r.totals.conversion);
   const { expandedYear, onToggleExpand, bracketBreakdownFor } = opts;
-  const colCount = 6 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0);
+  const colCount = 6 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasConversion ? 1 : 0);
 
   const bodyRows = [];
   for (const r of rows) {
@@ -221,6 +223,7 @@ function buildTable(result, opts = {}) {
       h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(r.totals.withdrawal) : '—'),
       taxCell,
       hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(r.totals.netSpendable) : '—') : null,
+      hasConversion ? h('td', { class: 'r' }, r.totals.conversion ? usdFull(r.totals.conversion) : '—') : null,
       h('td', { class: 'r' }, usdFull(r.totals.growth)),
       h('td', { class: 'r' }, usdFull(r.totals.endBalance)),
       h('td', { class: 'r' }, usdFull(r.real.endBalance)),
@@ -238,6 +241,7 @@ function buildTable(result, opts = {}) {
       h('th', { class: 'r' }, 'Withdrawal'),
       hasTax ? h('th', { class: 'r' }, 'Tax') : null,
       hasTax ? h('th', { class: 'r' }, 'Net spendable') : null,
+      hasConversion ? h('th', { class: 'r' }, 'Roth conversion') : null,
       h('th', { class: 'r' }, 'Growth'),
       h('th', { class: 'r' }, 'Balance (nominal)'), h('th', { class: 'r' }, "Balance (today's)"))),
     h('tbody', {}, ...bodyRows),
@@ -272,6 +276,7 @@ export function createProjectionView(opts = {}) {
     const endRow = r.years[r.years.length - 1];
     const contributed = r.years.reduce((sn, y) => sn + (y.totals.contribution || 0), 0);
     const lifetimeTax = r.years.reduce((sn, y) => sn + (y.totals.tax || 0), 0);
+    const lifetimeConversions = r.years.reduce((sn, y) => sn + (y.totals.conversion || 0), 0);
     const lifetimeGrossIncome = r.years.reduce((sn, y) => sn + (y.totals.grossIncome || 0), 0);
     // Lifetime EFFECTIVE rate: total tax ÷ total gross retirement income, summed across years
     // (not an average of the per-year rates, which would over-weight small-income years). This
@@ -296,6 +301,7 @@ export function createProjectionView(opts = {}) {
           : statTile("End of plan · today's dollars", usd(endRow.real.endBalance), `${r.horizonYear}`, endRow.real.endBalance > 0 ? COL.real : COL.critical),
         lifetimeTax > 0 ? statTile('Lifetime tax in retirement', usd(lifetimeTax), 'nominal, federal + state') : null,
         lifetimeTax > 0 ? statTile('Lifetime effective tax rate', `${(lifetimeEffectiveRate * 100).toFixed(1)}%`, 'total tax ÷ total gross income — compare across strategies') : null,
+        lifetimeConversions > 0 ? statTile('Converted to Roth', usd(lifetimeConversions), 'nominal, in the gap years before RMDs', COL.real) : null,
       ),
       buildChart(r),
       h('div', { class: 'table-toggle' },

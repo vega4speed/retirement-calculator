@@ -283,7 +283,15 @@ function pickReinvestmentTarget(accounts, fallbackId) {
  * @param {number} [p.bracketFillRate] `sequencing==='bracketFill'` only (design doc §5, Phase 6):
  *   the marginal ordinary-income rate to fill up to (must match a rate in yearTable's ordinary
  *   brackets, e.g. 0.12/0.22/0.24 — see tax.bracketTopForRate). Unset/no match ⇒ no ceiling.
- * @returns {{withdrawals:Record<string,number>, reinvestment:Record<string,number>, totalWithdrawn:number, tax:number, ordinaryTaxableIncome:number, capitalGain:number, taxableSocialSecurity:number, netAchieved:number, shortfall:number}}
+ * @param {boolean} [p.rothConversionsEnabled] Phase 6 stretch / Roth conversions: only takes
+ *   effect with `sequencing==='bracketFill'`. After funding the spending target, if there's
+ *   ceiling room left over (spending alone didn't use the whole bracket), convert that much MORE
+ *   from tax-deferred to Roth — preserved in full; the conversion's own tax is covered by
+ *   additional withdrawal via the normal sequencing, not by shrinking the converted amount or the
+ *   spending target. The CALLER is responsible for age-gating this to before the RMD-forcing age
+ *   (design doc §5: "the gap years between retirement and RMD age") — this function just does
+ *   what it's told.
+ * @returns {{withdrawals:Record<string,number>, reinvestment:Record<string,number>, conversions:Record<string,number>, conversionAmount:number, totalWithdrawn:number, tax:number, ordinaryTaxableIncome:number, capitalGain:number, taxableSocialSecurity:number, netAchieved:number, shortfall:number}}
  */
 function solveTaxYear(p) {
   const { accounts, sequencing, rmdFloors, filingStatus, yearTable } = p;
@@ -318,24 +326,71 @@ function solveTaxYear(p) {
     return { ordinaryTaxableIncome, gain, taxableSS, tax: fedOrdinary + fedCapGains + stateTax };
   };
 
-  let grossGuess = Math.max(0, p.targetNet);
-  let last = null;
-  let lastTotalWithdrawn = -1;
-  let exhausted = false; // true only when the LAST round hit the portfolio's total balance cap
-  let taxableSSEstimate = 0;
-  for (let i = 0; i < 8; i++) {
-    const taxDeferredCeiling = Math.max(0, bracketFillTop + stdDeduction - taxableSSEstimate);
-    const { withdrawals, totalWithdrawn } = sequenceWithdrawal(grossGuess, accounts, sequencing, rmdFloors, { taxDeferredCeiling });
-    const { ordinaryTaxableIncome, gain, taxableSS, tax } = taxFor(withdrawals);
-    taxableSSEstimate = taxableSS;
-    const netAchieved = totalWithdrawn - tax;
-    last = { withdrawals, totalWithdrawn, tax, ordinaryTaxableIncome, gain, taxableSS, netAchieved };
-    exhausted = totalWithdrawn >= totalAvailable - 1e-6;
-    if (exhausted) break;                                          // portfolio exhausted — a real shortfall
-    if (totalWithdrawn === lastTotalWithdrawn) break;              // pinned by floors; no further movement possible (surplus, not a shortfall)
-    if (Math.abs(netAchieved - p.targetNet) < 0.01) break;         // converged — within tolerance, NOT a shortfall
-    lastTotalWithdrawn = totalWithdrawn;
-    grossGuess = Math.max(0, grossGuess + (p.targetNet - netAchieved));
+  // The core gross-up fixed-point loop, extracted so a Roth conversion (below) can run it a
+  // SECOND time with an extra forced tax-deferred floor and `divertedAmount` (the conversion,
+  // which isn't spendable) subtracted from netAchieved — same convergence logic, just reused.
+  function grossUp(floors, divertedAmount) {
+    let grossGuess = Math.max(0, p.targetNet + divertedAmount);
+    let last = null;
+    let lastTotalWithdrawn = -1;
+    let exhausted = false; // true only when the LAST round hit the portfolio's total balance cap
+    let taxableSSEstimate = 0;
+    let taxDeferredCeiling = 0;
+    for (let i = 0; i < 8; i++) {
+      taxDeferredCeiling = Math.max(0, bracketFillTop + stdDeduction - taxableSSEstimate);
+      const { withdrawals, totalWithdrawn } = sequenceWithdrawal(grossGuess, accounts, sequencing, floors, { taxDeferredCeiling });
+      const { ordinaryTaxableIncome, gain, taxableSS, tax } = taxFor(withdrawals);
+      taxableSSEstimate = taxableSS;
+      const netAchieved = totalWithdrawn - tax - divertedAmount;
+      last = { withdrawals, totalWithdrawn, tax, ordinaryTaxableIncome, gain, taxableSS, netAchieved };
+      exhausted = totalWithdrawn >= totalAvailable - 1e-6;
+      if (exhausted) break;                                          // portfolio exhausted — a real shortfall
+      if (totalWithdrawn === lastTotalWithdrawn) break;              // pinned by floors; no further movement possible (surplus, not a shortfall)
+      if (Math.abs(netAchieved - p.targetNet) < 0.01) break;         // converged — within tolerance, NOT a shortfall
+      lastTotalWithdrawn = totalWithdrawn;
+      grossGuess = Math.max(0, grossGuess + (p.targetNet - netAchieved));
+    }
+    return { last, exhausted, taxDeferredCeiling };
+  }
+
+  let { last, exhausted, taxDeferredCeiling } = grossUp(rmdFloors, 0);
+
+  // Roth conversions (opt-in, bracketFill only): whatever bracket room the spending withdrawal
+  // above DIDN'T use, convert that much more tax-deferred -> Roth, then re-solve so the
+  // conversion's own tax is covered by additional withdrawal (normal sequencing), not by
+  // shrinking the conversion or the spending target.
+  let conversionAmount = 0;
+  const conversions = Object.fromEntries(accounts.map((a) => [a.id, 0]));
+  if (p.rothConversionsEnabled && sequencing === 'bracketFill' && !exhausted) {
+    const tdAccounts = accounts.filter((a) => a.taxStatus === 'taxDeferred');
+    const tdWithdrawnForSpending = tdAccounts.reduce((s, a) => s + (last.withdrawals[a.id] || 0), 0);
+    const roomLeft = Math.max(0, taxDeferredCeiling - tdWithdrawnForSpending);
+    const tdRemainingBalance = tdAccounts.reduce((s, a) => s + Math.max(0, a.balance - (last.withdrawals[a.id] || 0)), 0);
+    const desired = Math.min(roomLeft, tdRemainingBalance);
+    const targetId = accounts.find((a) => a.taxStatus === 'roth')?.id;
+    if (desired > 1e-9 && targetId) {
+      // Force the desired amount out of tax-deferred, on top of whatever spending already forced
+      // (RMD floors + the spending withdrawal itself), across accounts in balance order.
+      const conversionFloors = { ...rmdFloors };
+      let remaining = desired;
+      for (const a of tdAccounts) {
+        if (remaining <= 0) break;
+        const alreadyFloored = rmdFloors[a.id] || 0;
+        const alreadyWithdrawn = Math.max(alreadyFloored, last.withdrawals[a.id] || 0);
+        const avail = Math.max(0, a.balance - alreadyWithdrawn);
+        const take = Math.min(avail, remaining);
+        conversionFloors[a.id] = alreadyWithdrawn + take;
+        remaining -= take;
+      }
+      const actual = desired - remaining; // balances may cap it further than roomLeft alone did
+      if (actual > 1e-9) {
+        const resolved = grossUp(conversionFloors, actual);
+        last = resolved.last;
+        exhausted = resolved.exhausted;
+        conversions[targetId] = actual;
+        conversionAmount = actual;
+      }
+    }
   }
 
   // TODO (future work, noted 2026-07-21): this always reinvests an RMD-forced surplus. That's a
@@ -354,6 +409,8 @@ function solveTaxYear(p) {
   return {
     withdrawals: last.withdrawals,
     reinvestment,
+    conversions,
+    conversionAmount,
     totalWithdrawn: last.totalWithdrawn,
     tax: last.tax,
     ordinaryTaxableIncome: last.ordinaryTaxableIncome,
@@ -419,6 +476,10 @@ function solveTaxYear(p) {
  *   rate to fill tax-deferred withdrawals up to each year (design doc §5, Phase 6) — e.g. 0.12
  *   fills the 12% bracket before touching taxable/Roth. Must match a rate in the resolved year's
  *   ordinary brackets; see tax.bracketTopForRate.
+ * @param {boolean} [p.rothConversionsEnabled] `sequencing==='bracketFill'` only: convert
+ *   tax-deferred -> Roth to fill whatever bracket room the spending withdrawal didn't use, every
+ *   year before the SECURE-2.0 RMD-forcing age (needs `birthYear`; without one, there's no RMD
+ *   concept to gate on, so conversions run every year). See solveTaxYear's docs for the mechanics.
  * @param {number} [p.startCumulativeInflation] cumulative inflation already elapsed before
  *   startYear (carried over from accumulation so today's-dollars stays relative to one base
  *   year across the whole plan); default 1
@@ -504,13 +565,15 @@ export function projectDecumulation(p) {
 
     const seqAccounts = accounts.map((a) => ({ id: a.id, balance: bal[a.id], taxStatus: taxStatus[a.id], basisFraction: basisFraction[a.id] }));
 
-    let withdrawals, reinvestment, shortfall, tax = 0, ordinaryTaxableIncome = 0, capitalGain = 0, taxableSS = 0;
+    let withdrawals, reinvestment, conversions, shortfall, tax = 0, ordinaryTaxableIncome = 0, capitalGain = 0, taxableSS = 0;
     if (taxMode) {
       const age = Number.isInteger(p.birthYear) ? year - p.birthYear : null;
       const rmdFloors = {};
+      let beforeRmdAge = age == null; // no birthYear -> no RMD concept, so no age gate either
       if (age != null) {
         const rbAge = requiredBeginningAge(p.birthYear, p.taxTables.rmd);
-        if (age >= rbAge) {
+        beforeRmdAge = age < rbAge;
+        if (!beforeRmdAge) {
           for (const a of seqAccounts) {
             if (a.taxStatus === 'taxDeferred') rmdFloors[a.id] = rmdAmount(age, a.balance, p.taxTables.rmd);
           }
@@ -526,14 +589,17 @@ export function projectDecumulation(p) {
         yearTable, stateTaxRate: p.stateTaxRate,
         socialSecurityBenefit: ssBenefitNominal, fixedTables: p.taxTables.fixed,
         bracketFillRate: p.bracketFillRate,
+        // Roth conversions (design doc §5): only in the gap years before RMDs are forced.
+        rothConversionsEnabled: !!p.rothConversionsEnabled && beforeRmdAge,
       });
-      withdrawals = solved.withdrawals; reinvestment = solved.reinvestment; shortfall = solved.shortfall;
+      withdrawals = solved.withdrawals; reinvestment = solved.reinvestment; conversions = solved.conversions; shortfall = solved.shortfall;
       tax = solved.tax; ordinaryTaxableIncome = solved.ordinaryTaxableIncome; capitalGain = solved.capitalGain;
       taxableSS = solved.taxableSocialSecurity;
     } else {
       const seq = sequenceWithdrawal(gap, seqAccounts, sequencing);
       withdrawals = seq.withdrawals; shortfall = seq.shortfall;
       reinvestment = Object.fromEntries(accounts.map((a) => [a.id, 0]));
+      conversions = Object.fromEntries(accounts.map((a) => [a.id, 0]));
     }
 
     const acc = {};
@@ -541,14 +607,15 @@ export function projectDecumulation(p) {
       const startBalance = bal[a.id];
       const withdrawal = withdrawals[a.id];
       const reinvest = reinvestment[a.id] || 0;
-      const remainder = startBalance - withdrawal + reinvest;
+      const conversionIn = conversions[a.id] || 0;
+      const remainder = startBalance - withdrawal + reinvest + conversionIn;
       const r = num(resolve(returnRate, { accountId: a.id, year }));
       const growth = remainder * r;
       const endBalance = remainder + growth;
       bal[a.id] = endBalance;
-      acc[a.id] = { startBalance, withdrawal, reinvestment: reinvest, growth, endBalance };
+      acc[a.id] = { startBalance, withdrawal, reinvestment: reinvest, conversion: conversionIn, growth, endBalance };
     }
-    const totals = rowTotals(acc, ['withdrawal', 'reinvestment']);
+    const totals = rowTotals(acc, ['withdrawal', 'reinvestment', 'conversion']);
     totals.spendingNeed = desired;
     totals.otherIncome = otherIncomeNominal;
     totals.socialSecurity = ssBenefitNominal;
@@ -558,7 +625,9 @@ export function projectDecumulation(p) {
     totals.tax = tax;
     totals.ordinaryTaxableIncome = ordinaryTaxableIncome;
     totals.capitalGain = capitalGain;
-    totals.netSpendable = otherIncomeNominal + ssBenefitNominal + (totals.withdrawal - tax - totals.reinvestment);
+    // A Roth conversion is diverted into another owned account, not spent — excluded from
+    // netSpendable exactly like reinvestment already is (see rothConversionsEnabled's docs above).
+    totals.netSpendable = otherIncomeNominal + ssBenefitNominal + (totals.withdrawal - tax - totals.reinvestment - totals.conversion);
     // Gross income realized this year (before tax, including tax-free withdrawals like Roth) and
     // the EFFECTIVE rate that funds — as opposed to the MARGINAL rate the bracket breakdown shows
     // (the rate on the next/last dollar). Effective rate is what a bracket-fill-vs-conventional
@@ -585,6 +654,7 @@ export function projectDecumulation(p) {
         shortfall: totals.shortfall / cumInflation,
         tax: totals.tax / cumInflation,
         netSpendable: totals.netSpendable / cumInflation,
+        conversion: totals.conversion / cumInflation,
       },
     });
   }
@@ -617,6 +687,8 @@ export function projectDecumulation(p) {
  * @param {'fixedReal'|'fixedPercent'} [p.strategy] decumulation only
  * @param {'conventional'|'proportional'|'bracketFill'} [p.sequencing] decumulation only
  * @param {number} [p.bracketFillRate] `sequencing==='bracketFill'` only (Phase 6, design doc §5)
+ * @param {boolean} [p.rothConversionsEnabled] `sequencing==='bracketFill'` only (Phase 6 stretch,
+ *   design doc §5) — see projectDecumulation's docs
  * @param {'mfj'|'single'|'hoh'} [p.filingStatus] enables Phase 4 tax-aware decumulation
  * @param {object} [p.taxTables] parsed tax-tables.json
  * @param {number} [p.anchorYear] required if taxTables given
@@ -685,6 +757,7 @@ export function project(p) {
       returnRate: p.returnRate, inflation: p.inflation,
       spending: p.spending, otherIncome: p.otherIncome, withdrawalPercent: p.withdrawalPercent,
       strategy: p.strategy, sequencing: p.sequencing, bracketFillRate: p.bracketFillRate,
+      rothConversionsEnabled: p.rothConversionsEnabled,
       startCumulativeInflation: lastAccRow.cumulativeInflation,
       filingStatus: p.filingStatus, taxTables: p.taxTables, anchorYear: p.anchorYear,
       bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,

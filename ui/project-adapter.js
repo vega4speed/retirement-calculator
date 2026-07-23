@@ -36,6 +36,7 @@ function paramsFor(state, taxTables) {
     strategy: plan.strategy,
     sequencing: plan.sequencing,
     bracketFillRate: plan.sequencing === 'bracketFill' ? plan.bracketFillRate : undefined,
+    rothConversionsEnabled: plan.sequencing === 'bracketFill' ? !!plan.rothConversionsEnabled : undefined,
     // birthYear is passed unconditionally — it drives the table's age column even when tax
     // tables didn't load (age display doesn't depend on tax being computed).
     birthYear: Number.isFinite(filing.birthYear) ? filing.birthYear : undefined,
