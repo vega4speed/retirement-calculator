@@ -41,9 +41,8 @@ engine/             pure calculation modules (no DOM, no I/O) — unit-tested
                        binary search for the highest constant spend the portfolio survives
                        (done + tested)
   socialsecurity.js   earnings → AIME → PIA → claiming, COLA, solvency haircut (done + tested)
-  strategies.js       superseded by project.js's built-in sequencing (now incl.
-                       bracketFill, Phase 6); Roth conversions remain the natural
-                       extension of the same machinery
+  strategies.js       superseded by project.js's built-in sequencing (bracketFill,
+                       Phase 6, plus Roth conversions built on top of it)
 ui/                 vanilla-JS UI (accounts, Simple/Expand controls, projection chart,
                      scenario comparison — Phase 7)
 data/               tax-tables.json + example profile/snapshot/scenario templates
@@ -98,8 +97,21 @@ saved scenario back into the live editor to keep tweaking it — and once loaded
 button appears so a change you make actually gets saved back to that scenario, instead of only
 existing in the (also-persisted, but separate) live editor state.
 
-In progress: Roth conversions (the natural extension of the bracket-fill machinery) and
-couple/spousal Social Security.
+**Roth conversions.** Built on top of bracket-fill sequencing: in the gap years before you're
+forced to take RMDs, whatever room is left in your chosen bracket after covering spending gets
+converted from tax-deferred to Roth instead of sitting unused — preserved in full; its own tax
+comes from other accounts, not carved out of the converted amount. Raises this year's tax bill
+on purpose, to shrink future RMDs and grow tax-free after — a "Converted to Roth" stat tile, table
+column, and chart-hover line show what happened, and it's comparable across scenarios too.
+
+**Pre-retirement tax rate.** A snapshot (not a multi-year projection) of today's marginal and
+effective tax rate, from the same earnings figure the Social Security estimate uses, compared
+against your projected retirement lifetime effective rate — with a plain-language verdict on
+whether traditional (tax-deferred) or Roth contributions look more tax-efficient for you right
+now. The standard financial-planning heuristic for that decision, not a full income-growth
+projection through your working years.
+
+In progress: couple/spousal Social Security (the remaining v1-boundary item).
 
 Known simplifications, documented in the code: state tax is a flat rate (no state brackets);
 `otherIncome` (pension/rental placeholder) still isn't taxed — a deliberate v1 boundary, unlike
@@ -110,7 +122,9 @@ reasoning); the FICA wage-base cap isn't modeled (high earners' PIA is modestly 
 Social Security only starts once decumulation begins, even if your claiming age is earlier;
 taxable-account cost basis is a constant fraction from your snapshot, not grown through
 contributions; HSA non-medical penalties and Roth early-withdrawal rules aren't modeled; light
-theme only (no dark mode); no income modeling yet (blocks a %-of-income contribution mode).
+theme only (no dark mode); the pre-retirement tax snapshot is a single point in time, not a
+year-by-year working-years projection, and doesn't feed a %-of-income contribution mode (still
+blocked on real income modeling, per §4.1a).
 
 > **Note:** `data/tax-tables.json` 2025/2026 figures are verified against IRS Rev. Proc. 2025-32
 > and cross-checked secondary sources (see the file's `_meta`). RMD divisors past age 100 are
