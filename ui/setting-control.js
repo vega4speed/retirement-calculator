@@ -43,7 +43,25 @@ export function createSettingControl(opts) {
   let accounts = perAccount && opts.accounts ? [...opts.accounts] : [];
   const baseYear = opts.baseYear ?? new Date().getFullYear();
   const onChange = opts.onChange || (() => {});
-  let setting = isSetting(opts.setting) ? opts.setting : makeSetting(opts.setting ?? 0);
+  // A setting round-tripped through localStorage/JSON can lose its `default` key entirely if it
+  // was ever set to `undefined` (JSON.stringify drops undefined-valued keys) -- e.g. clearing the
+  // Simple-mode input to blank while an override already exists. isSetting() then reports false
+  // even though byAccount/byYear/byAccountYear are intact, and naively falling back to
+  // makeSetting(opts.setting ?? 0) would wrap the WHOLE surviving override object as the new
+  // `default` (since `?? 0` only catches null/undefined, not an object) -- every resolved value
+  // then falls through to that corrupt default and Number({...}) reads as NaN in the UI. Repair
+  // in place instead: add back a default of 0 while keeping the existing override maps, and keep
+  // the SAME object reference as opts.setting so the header input's in-place mutation (below)
+  // keeps writing through to the caller's assumptions object, same as the normal isSetting path.
+  const hasOwn = (obj, key) => obj != null && Object.prototype.hasOwnProperty.call(obj, key);
+  const looksLikeSettingMissingDefault = (v) =>
+    v != null && typeof v === 'object' && !Array.isArray(v) &&
+    (hasOwn(v, 'byAccount') || hasOwn(v, 'byYear') || hasOwn(v, 'byAccountYear'));
+  let setting = opts.setting;
+  if (!isSetting(setting)) {
+    if (looksLikeSettingMissingDefault(setting)) setting.default = 0;
+    else setting = makeSetting(setting ?? 0);
+  }
   let expanded = false;
 
   const el = h('div', { class: 'setting' });
@@ -150,7 +168,11 @@ export function createSettingControl(opts) {
     clear(el);
     const header = h('div', { class: 'setting-head' },
       h('label', { class: 'setting-label' }, opts.label),
-      inputWrap(fmt.toStr(setting.default), (v) => { setting.default = v; emit(); }),
+      // A setting must always keep an own `default` -- it's how isSetting()/the resolver tell a
+      // real setting object apart from a bare literal, and JSON.stringify silently DROPS a key
+      // set to `undefined`, which corrupts the setting on the next localStorage load (see the
+      // repair logic above). Clearing this field to blank means "reset to 0", not "no default".
+      inputWrap(fmt.toStr(setting.default), (v) => { setting.default = v ?? 0; emit(); }),
       h('button', { class: 'link expand', onclick: () => { expanded = !expanded; render(); } }, expanded ? 'Collapse ▾' : 'Expand ▸'),
     );
     el.append(header);
