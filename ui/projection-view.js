@@ -213,7 +213,18 @@ function buildTable(result, opts = {}) {
   const hasConversion = rows.some((r) => r.totals.conversion);
   const hasMatch = rows.some((r) => r.totals.employerMatch);
   const { expandedYear, onToggleExpand, bracketBreakdownFor } = opts;
-  const colCount = 6 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0);
+  const getAccountLabel = opts.getAccountLabel || ((id) => id);
+
+  // Per-account contribution breakdown (only accounts that ever actually contribute or get a
+  // match, across the accumulation years -- an account that's never funded doesn't earn a column).
+  // Order follows the accounts' own insertion order in each row (== the original account order).
+  const accumRows = rows.filter((r) => r.phase !== 'decumulation');
+  const perAccountIds = accumRows.length
+    ? Object.keys(accumRows[0].accounts).filter((id) =>
+        accumRows.some((r) => (r.accounts[id]?.contribution || 0) > 1e-9 || (r.accounts[id]?.employerMatch || 0) > 1e-9))
+    : [];
+
+  const colCount = 6 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0) + perAccountIds.length;
 
   const bodyRows = [];
   for (const r of rows) {
@@ -225,12 +236,24 @@ function buildTable(result, opts = {}) {
             usdFull(r.totals.tax), ' ', expandedYear === r.year ? '▾' : '▸'))
         : h('td', { class: 'r' }, usdFull(r.totals.tax));
 
+    const perAccountCells = perAccountIds.map((id) => {
+      const a = r.accounts[id];
+      const contribution = a?.contribution || 0;
+      const match = a?.employerMatch || 0;
+      if (contribution <= 1e-9 && match <= 1e-9) return h('td', { class: 'r' }, '—');
+      return h('td', { class: 'r' },
+        h('div', {}, usdFull(contribution)),
+        match > 1e-9 ? h('div', { class: 'muted small' }, `+${usdFull(match)} match`) : null,
+      );
+    });
+
     bodyRows.push(h('tr', {},
       h('td', {}, r.year),
       h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       hasAge ? h('td', { class: 'r' }, r.age ?? '—') : null,
       h('td', { class: 'r' }, r.totals.contribution ? usdFull(r.totals.contribution) : '—'),
       hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? usdFull(r.totals.employerMatch) : '—') : null,
+      ...perAccountCells,
       h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(r.totals.withdrawal) : '—'),
       taxCell,
       hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(r.totals.netSpendable) : '—') : null,
@@ -250,6 +273,7 @@ function buildTable(result, opts = {}) {
       hasAge ? h('th', { class: 'r' }, 'Age') : null,
       h('th', { class: 'r' }, 'Contribution'),
       hasMatch ? h('th', { class: 'r' }, 'Employer match') : null,
+      ...perAccountIds.map((id) => h('th', { class: 'r' }, getAccountLabel(id))),
       h('th', { class: 'r' }, 'Withdrawal'),
       hasTax ? h('th', { class: 'r' }, 'Tax') : null,
       hasTax ? h('th', { class: 'r' }, 'Net spendable') : null,
@@ -264,6 +288,7 @@ function buildTable(result, opts = {}) {
 export function createProjectionView(opts = {}) {
   const el = h('div');
   const bracketBreakdownFor = opts.bracketBreakdownFor;
+  const getAccountLabel = opts.getAccountLabel || ((id) => id);
   let showTable = false;
   let expandedYear = null;
   let current = null;
@@ -324,6 +349,7 @@ export function createProjectionView(opts = {}) {
       parts.push(buildTable(r, {
         expandedYear,
         bracketBreakdownFor,
+        getAccountLabel,
         onToggleExpand: (year) => { expandedYear = expandedYear === year ? null : year; render(); },
       }));
     }

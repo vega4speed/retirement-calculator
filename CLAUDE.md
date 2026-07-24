@@ -246,7 +246,13 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          accumulation-phase rows now show income/tax/marginal/effective + any
                          conversion too, not just the contribution) + a table (both phases, sticky
                          headers, an age column when birthYear is known, a Roth-conversion column
-                         and an Employer-match column when relevant, and a clickable Tax cell that
+                         and an Employer-match column when relevant, PLUS one column per account
+                         during accumulation years (only accounts that ever actually get a
+                         contribution or match — an unused account earns no column), each cell
+                         showing that account's own contribution with any employer match as a
+                         small sub-line; requires `opts.getAccountLabel(id)` from the caller
+                         (app.js supplies `snapshot.accounts.find(...).label || id`) so headers
+                         show real names, not raw account ids — and a clickable Tax cell that
                          expands a per-bracket breakdown row — including what the standard
                          deduction sheltered, plus a marginal-vs-effective-rate line — the whole
                          view preserves scroll position, both the page's own AND the table's own
@@ -350,8 +356,20 @@ convention as everything else) fills each tier in priority order, respecting tha
 limit (all now sourced + verified: IRA/Roth IRA, the 401(k) elective deferral limit including
 SECURE 2.0's age-60-63 enhanced catch-up, and the Roth IRA income phase-out) before spilling over
 to the next. Employer match is modeled as a simple single-tier formula (rate + cap % of pay) and
-tracked as free money, separate from your own contribution. In progress: couple/spousal Social
-Security (the remaining v1-boundary item from §13).
+tracked as free money, separate from your own contribution.
+
+**Per-account table columns (2026-07-24):** the projection table now shows a column per account
+during the accumulation years (contribution + any employer match, only for accounts that ever
+actually get funded), so you can see exactly where a given year's money went without doing the
+math by hand — added while diagnosing a user-reported "this final balance looks way too high"
+question. That diagnosis: reproducing the exact reported inputs (3 accounts, 10% return, 46-year
+horizon, 15%-of-income waterfall) against the code as of this commit produced a real, internally-
+consistent, hand-verified result — NOT the much larger figure originally reported. Employer match
+matched exactly between the two runs (confirming income/wage-growth calc was consistent); total
+contributed and ending balance did not, in a pattern (less contributed, way more ending value)
+that points at a stale cached page or a hidden per-year override rather than a live engine bug —
+nothing in this session's own reproduction was wrong. In progress: couple/spousal Social Security
+(the remaining v1-boundary item from §13).
 
 **Fixed 2026-07-22 (two small UI bugs):**
 1. Clicking a Tax cell to expand its per-bracket breakdown — or toggling "Show table" — fully

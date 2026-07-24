@@ -149,7 +149,9 @@ that step's real IRS limit, before moving to the next: 401(k) up to your match, 
 max, Roth IRA up to its limit (reduced or eliminated at higher incomes, per the real IRS
 phase-out), then back to the 401(k) for whatever's left, capped by its own real annual limit.
 Employer match is modeled separately as free money on top of your own contribution, shown as its
-own stat tile and table column.
+own stat tile and table column. The projection table also shows a column per account during your
+working years (contribution + any match, for any account that's actually funded), so you can see
+exactly where each year's money went without doing the math by hand.
 
 In progress: couple/spousal Social Security (the remaining v1-boundary item).
 

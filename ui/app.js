@@ -155,7 +155,10 @@ export async function mount(root) {
     return { year, income, taxableIncome, tax, marginalRate, effectiveRate };
   }
 
-  const projectionView = createProjectionView({ bracketBreakdownFor });
+  const projectionView = createProjectionView({
+    bracketBreakdownFor,
+    getAccountLabel: (id) => snapshot.accounts.find((a) => a.id === id)?.label || id,
+  });
 
   // Loads a saved scenario BACK into the live editor (overwriting it — the scenario itself stays
   // untouched, since it was saved as a deep copy). Mirrors loadPersisted()'s defaults-then-
