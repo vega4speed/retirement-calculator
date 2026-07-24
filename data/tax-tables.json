@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Dated US federal tax tables consumed by the tax engine (design doc §8). Data, not code — update this file for a new tax year rather than touching engine logic.",
-    "verificationStatus": "2025 and 2026 ordinary/LTCG brackets, standard deductions, and SS bend points verified 2026-07-21 via IRS Rev. Proc. 2025-32 (2026) and cross-checked against multiple independent secondary sources (Tax Foundation, Kiplinger, Bipartisan Policy Center) — see per-year 'sources'. Reconciles the older pre-OBBBA figures previously in ../../Taxes/CLAUDE.md (2025 MFJ $30,000 / 2026 ~$30,600): those predate the One Big Beautiful Bill Act (OBBBA, signed 2025-07-04), which raised the standard deduction and made the TCJA bracket structure permanent — the numbers below are current law. NOT yet modeled: OBBBA's separate temporary $6,000/qualifying-taxpayer 'senior deduction' (2025-2028, phases out above $75k single/$150k MFJ MAGI) — a known gap, layered on top of the standard age-65 addition below, not a replacement for it. HSA self-only/family limits verified 2026-07-24 via IRS Rev. Proc. 2024-25 (2025: $4,300/$8,550) and Rev. Proc. 2025-19 (2026: $4,400/$8,750), cross-checked against secondary sources (HealthEquity, Keenan). The $1,000 55+ catch-up is fixed by statute (unindexed since 2009) — see 'fixed.hsaCatchUp'.",
+    "verificationStatus": "2025 and 2026 ordinary/LTCG brackets, standard deductions, and SS bend points verified 2026-07-21 via IRS Rev. Proc. 2025-32 (2026) and cross-checked against multiple independent secondary sources (Tax Foundation, Kiplinger, Bipartisan Policy Center) — see per-year 'sources'. Reconciles the older pre-OBBBA figures previously in ../../Taxes/CLAUDE.md (2025 MFJ $30,000 / 2026 ~$30,600): those predate the One Big Beautiful Bill Act (OBBBA, signed 2025-07-04), which raised the standard deduction and made the TCJA bracket structure permanent — the numbers below are current law. NOT yet modeled: OBBBA's separate temporary $6,000/qualifying-taxpayer 'senior deduction' (2025-2028, phases out above $75k single/$150k MFJ MAGI) — a known gap, layered on top of the standard age-65 addition below, not a replacement for it. HSA self-only/family limits verified 2026-07-24 via IRS Rev. Proc. 2024-25 (2025: $4,300/$8,550) and Rev. Proc. 2025-19 (2026: $4,400/$8,750), cross-checked against secondary sources (HealthEquity, Keenan). The $1,000 55+ catch-up is fixed by statute (unindexed since 2009) — see 'fixed.hsaCatchUp'. IRA/Roth IRA limits + catch-up, the 401(k)/403(b) elective deferral limit + catch-up (incl. SECURE 2.0's age-60-63 enhanced catch-up), and the Roth IRA MAGI phase-out ranges verified 2026-07-24: 2025 figures (IRA $7,000/$1,000 catch-up; elective deferral $23,500/$7,500 catch-up/$11,250 age-60-63; Roth phase-out single $150k-$165k, MFJ $236k-$246k) and 2026 figures (IRA $7,500/$1,100; elective deferral $24,500/$8,000/$11,250; Roth phase-out single $153k-$168k, MFJ $242k-$252k) cross-checked against IRS.gov, Notice 2025-67, and secondary sources (Schwab, Empower, ASPPA). Unlike HSA's catch-up, the IRA catch-up is NOT fixed — SECURE 2.0 indexed it starting 2024. The Roth phase-out range published for 'single' also applies to head-of-household filers (the IRS doesn't publish a separate HOH range for this).",
     "amountsAreNominalUSD": true,
     "bracketFormat": "Each bracket is {upTo, rate}. 'upTo' is the top of taxable income taxed at 'rate'; the final bracket uses upTo: null (no ceiling). Marginal, not effective.",
     "sources": [
@@ -58,7 +58,13 @@
         "factors": [0.90, 0.32, 0.15],
         "bendPointsMonthly": { "first": 1226, "second": 7391 }
       },
-      "hsaLimits": { "selfOnly": 4300, "family": 8550 }
+      "hsaLimits": { "selfOnly": 4300, "family": 8550 },
+      "iraLimits": { "base": 7000, "catchUp": 1000 },
+      "electiveDeferralLimit": { "base": 23500, "catchUp": 7500, "enhancedCatchUp": 11250 },
+      "rothIraPhaseOut": {
+        "single": { "start": 150000, "end": 165000 },
+        "mfj": { "start": 236000, "end": 246000 }
+      }
     },
 
     "2026": {
@@ -106,7 +112,13 @@
         "factors": [0.90, 0.32, 0.15],
         "bendPointsMonthly": { "first": 1286, "second": 7749 }
       },
-      "hsaLimits": { "selfOnly": 4400, "family": 8750 }
+      "hsaLimits": { "selfOnly": 4400, "family": 8750 },
+      "iraLimits": { "base": 7500, "catchUp": 1100 },
+      "electiveDeferralLimit": { "base": 24500, "catchUp": 8000, "enhancedCatchUp": 11250 },
+      "rothIraPhaseOut": {
+        "single": { "start": 153000, "end": 168000 },
+        "mfj": { "start": 242000, "end": 252000 }
+      }
     }
   },
 

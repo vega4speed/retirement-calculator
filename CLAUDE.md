@@ -125,6 +125,30 @@ engine/               pure calculation modules (unit-tested)
                          unconditional tax-law fact, not a toggle). Each account row also carries
                          `netCost` (the take-home figure, informational — undefined for roth/
                          taxable/cash, which have no gross-up to report).
+                         Phase 6.7, the contribution waterfall (DONE): the standard "investment
+                         order" — Traditional up to the employer match, then HSA to its max, then
+                         Roth IRA to its (income-phased-out) limit, then back to Traditional for
+                         whatever's left of ONE overall take-home budget — as a single opt-in
+                         (`contributionWaterfallEnabled` + `waterfallBudget`) rather than typing
+                         four separate numbers. `computeContributionWaterfall()`: claims up to 3
+                         accounts by role (first taxDeferred/hsa/roth, same convention Roth
+                         conversions already use — v1/single-person scope; a second account of the
+                         same status keeps using its own independent `contributions` setting,
+                         composed into the SAME shared deduction pool afterward). Tier 3 assumes
+                         "roth" means a Roth IRA (the smaller, separate IRS limit), not a Roth
+                         401(k) (documented assumption, not a general Roth-account cap). Employer
+                         match (`matchRate`/`matchCapPercent`, plain constants not resolver
+                         settings — a scope simplification) is FREE money tracked separately
+                         (`employerMatch`, both per-account and in totals) — it's not your wages to
+                         begin with, so it never touches `runningBefore`/the take-home budget.
+                         New tax.js exports back this: `iraContributionLimit()`,
+                         `electiveDeferralLimit()` (401(k)/403(b), incl. SECURE 2.0's age-60-63
+                         enhanced catch-up, which REPLACES rather than stacks on the standard
+                         50+ catch-up), `rothIraPhaseOutFactor()` (linear 1→0 across the MAGI
+                         range, MAGI approximated as gross `income` — same precision level as the
+                         rest of this app's income modeling; HOH uses the single range, matching
+                         the real IRS convention). All three limits verified + indexed the SAME
+                         way as the standard deduction (see tax-tables.json's `_meta`).
   socialsecurity.js     earnings → AIME → PIA → claiming → COLA/haircut — DONE (implemented +
                          tested). fullRetirementAge() (1983-Amendments table), estimatePIA()
                          (bend-point formula on a "wage-indexed-equivalent" earnings setting —
@@ -165,6 +189,14 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          fresh default rather than reinterpreting the same stored number under the
                          other mode's totally different meaning (a $10,000 dollar-mode value would
                          otherwise read as 1,000,000% if left in place).
+                         Contribution waterfall (Phase 6.7) controls: `plan.contributionWaterfallEnabled`
+                         + a new household-level `assumptions.waterfallBudget` setting (read the
+                         SAME dollar/percent way as `contributions`, via the same contributionMode
+                         toggle) + `plan.matchRate`/`plan.matchCapPercent` (plain percentFieldRow
+                         numeric inputs, not resolver settings). Shown only when tax tables loaded
+                         (needs real IRS limits + brackets). Doesn't hide the existing "Annual
+                         contribution" row — accounts NOT claimed by the waterfall (a second
+                         taxDeferred account, taxable, cash) still use it independently.
   project-adapter.js    projectFor(state, taxTables) — the ONE place that maps the app's
                          {snapshot, assumptions, plan, filing, social} state shape to a
                          project() call. Shared by app.js (the live editor) and scenarios.js
@@ -207,30 +239,35 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          aggregates, not the whole-plan ones, since accumulation can carry tax
                          too now; a "Total tax, working + retired" tile appears only when that
                          whole-plan figure actually differs from the decumulation-only one;
-                         "Converted to Roth" sums both phases) + the two-series chart (today's $
-                         vs nominal, retirement marker, hover tooltip shows age + that year's
-                         effective tax rate + any Roth conversion — accumulation-phase rows now
-                         show income/tax/marginal/effective + any conversion too, not just the
-                         contribution) + a table (both phases, sticky headers, an age column when
-                         birthYear is known, a Roth-conversion column when relevant, and a
-                         clickable Tax cell that expands a per-bracket breakdown row — including
-                         what the standard deduction sheltered, plus a marginal-vs-effective-rate
-                         line — the whole view preserves scroll position, both the page's own AND
-                         the table's own internal scroll container, across re-renders)
+                         "Converted to Roth" sums both phases; a new "Employer match" tile
+                         appears only when the waterfall produced one) + the two-series chart
+                         (today's $ vs nominal, retirement marker, hover tooltip shows age + that
+                         year's effective tax rate + any Roth conversion + any employer match —
+                         accumulation-phase rows now show income/tax/marginal/effective + any
+                         conversion too, not just the contribution) + a table (both phases, sticky
+                         headers, an age column when birthYear is known, a Roth-conversion column
+                         and an Employer-match column when relevant, and a clickable Tax cell that
+                         expands a per-bracket breakdown row — including what the standard
+                         deduction sheltered, plus a marginal-vs-effective-rate line — the whole
+                         view preserves scroll position, both the page's own AND the table's own
+                         internal scroll container, across re-renders)
   chart-utils.js         shared chart primitives (usd/usdFull formatters, niceCeil axis rounding,
                          xTickYears, the fixed non-categorical COL tokens) — factored out in
                          Phase 7 so projection-view.js's chart and scenarios.js's comparison
                          chart don't each keep their own copy.
   dom.js, formats.js    tiny DOM builder (incl. SVG) + value<->input formatting helpers
 data/                 tax-tables.json (verified 2025/2026 figures, now incl. HSA self-only/family
-                       limits per year + the fixed $1,000/age-55 catch-up) + EXAMPLE templates
+                       limits, IRA/Roth-IRA limits + catch-up, the 401(k) elective deferral limit
+                       + SECURE 2.0 catch-ups, and the Roth IRA MAGI phase-out ranges, all per
+                       year; the fixed $1,000/age-55 HSA catch-up lives in `fixed`) + EXAMPLE
+                       templates
 schemas/              JSON Schemas for profile / snapshot / scenario — scaffolding from Phase 0,
                        predates the app's actual (simpler) state shape; not wired up (see
                        scenarios.js above)
 test/                 node:test suites (smoke, resolver, accumulation, accumulation-tax,
-                       hsa-contributions, decumulation, tax, decumulation-tax, socialsecurity,
-                       social-security-decumulation, bracket-fill, max-sustainable,
-                       roth-conversions) — 146 passing.
+                       hsa-contributions, contribution-waterfall, decumulation, tax,
+                       decumulation-tax, socialsecurity, social-security-decumulation,
+                       bracket-fill, max-sustainable, roth-conversions) — 155 passing.
 ```
 
 ## Running
@@ -305,8 +342,16 @@ Traditional 401(k)/IRA (real tax law), plus two HSA-only per-account options: ma
 that year's indexed IRS limit + 55+ catch-up, verified/sourced in `tax-tables.json`) and via
 payroll (also skips FICA — a real tax advantage 401(k)/IRA never get, regardless of contribution
 method). A one-line readout under the contribution setting shows today's real gross-equivalent for
-whatever the default value resolves to. In progress: couple/spousal Social Security (the remaining
-v1-boundary item from §13).
+whatever the default value resolves to.
+**Phase 6.7, the contribution waterfall (2026-07-24):** the standard "investment order" — match,
+then HSA, then Roth IRA, then back to Traditional — as one opt-in toggle instead of four separate
+numbers you'd have to compute by hand. One overall take-home budget (dollar or % of income, same
+convention as everything else) fills each tier in priority order, respecting that tier's real IRS
+limit (all now sourced + verified: IRA/Roth IRA, the 401(k) elective deferral limit including
+SECURE 2.0's age-60-63 enhanced catch-up, and the Roth IRA income phase-out) before spilling over
+to the next. Employer match is modeled as a simple single-tier formula (rate + cap % of pay) and
+tracked as free money, separate from your own contribution. In progress: couple/spousal Social
+Security (the remaining v1-boundary item from §13).
 
 **Fixed 2026-07-22 (two small UI bugs):**
 1. Clicking a Tax cell to expand its per-bracket breakdown — or toggling "Show table" — fully
@@ -350,7 +395,14 @@ simplification, not a hard requirement; HSA contribution limits are indexed by t
 the standard deduction (a reasonable proxy — 2025→2026 growth was +2.3% on both tiers, tracking
 close to inflation) rather than the real IRS formula's own lumpier $50-rounded chained-CPI
 calculation; self-employed HSA/FICA/SE-tax differences aren't modeled — a known gap, logged for
-later, not blocking (self-employment tax works entirely differently from W-2 payroll FICA).
+later, not blocking (self-employment tax works entirely differently from W-2 payroll FICA); the
+contribution waterfall assumes a SINGLE-tier employer match (rate + cap % of pay) rather than a
+real multi-tier formula ("100% on the first 3%, 50% on the next 2%"), and claims accounts by
+role/taxStatus (first taxDeferred/hsa/roth) rather than letting you assign specific accounts to
+specific tiers — both real, documented scope simplifications, not oversights; Roth IRA MAGI is
+approximated as gross `income` (not a real AGI/MAGI calculation), and the phase-out is linear
+rather than the IRS's own $10-rounded/$200-floor version; the combined employer+employee 401(k)
+contribution limit (~$70k) isn't modeled, only the employee's own elective deferral limit.
 
 > `data/tax-tables.json` 2025/2026 figures are VERIFIED (IRS Rev. Proc. 2025-32 + cross-checked
 > secondary sources, see `_meta`). RMD divisors past age 100 are unverified approximations.

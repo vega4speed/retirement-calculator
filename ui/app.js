@@ -33,6 +33,7 @@ const EXAMPLE_ACCOUNTS = [
 const defaultAssumptions = () => ({
   returnRate: { default: 0.07 },
   contributions: { default: 0 },
+  waterfallBudget: { default: 0.15 }, // contribution waterfall only -- household-level, not per-account
   inflation: { default: 0.03 },
   wageGrowth: { default: 0.03 },
   spending: { default: 40000 },
@@ -82,6 +83,9 @@ export async function mount(root) {
     bracketFillRate: 0.12,       // 'bracketFill' only: which ordinary bracket to fill up to
     rothConversionsEnabled: false, // 'bracketFill' only: also convert unused room to Roth
     contributionMode: 'dollar',  // 'dollar' | 'percentOfIncome' -- see engine/project.js's docs
+    contributionWaterfallEnabled: false, // "standard investment order" -- see engine/project.js's computeContributionWaterfall docs
+    matchRate: 1.0,               // waterfall only: fraction of the tier-1 employee contribution matched
+    matchCapPercent: 0.04,        // waterfall only: fraction of income eligible for match
   };
 
   const acctSummary = () => snapshot.accounts.map((a) => ({ id: a.id, label: a.label || a.id }));
@@ -202,6 +206,9 @@ export async function mount(root) {
     plan.bracketFillRate = 0.12;
     plan.rothConversionsEnabled = false;
     plan.contributionMode = 'dollar';
+    plan.contributionWaterfallEnabled = false;
+    plan.matchRate = 1.0;
+    plan.matchCapPercent = 0.04;
     rebuild();
   }
 
@@ -351,6 +358,25 @@ export async function mount(root) {
       h('label', { class: 'setting-label' }, 'Benefits payable (if depleted)'),
       h('span', { class: 'field' }, input, h('span', { class: 'affix' }, '%')),
       h('span', { class: 'muted small' }, '100% = assume Congress fixes it; ~77% = the OASI trust fund\'s own projection'),
+    ));
+  }
+
+  // A plain 0-100 numeric field for a plan-level percent that's a constant, not a per-year
+  // resolver setting (unlike settingRow's knobs) -- e.g. the waterfall's match rate/cap. Same
+  // shape as haircutFactorRow above, generalized to any get/set pair.
+  function percentFieldRow(label, get, set, hint) {
+    const input = h('input', {
+      type: 'number', step: 'any', value: +(get() * 100).toFixed(4), class: 'num',
+      onchange: (e) => {
+        const v = Number(e.target.value);
+        set(Number.isFinite(v) ? Math.max(0, v) / 100 : get());
+        persist(); rebuild();
+      },
+    });
+    return h('div', { class: 'setting' }, h('div', { class: 'setting-head' },
+      h('label', { class: 'setting-label' }, label),
+      h('span', { class: 'field' }, input, h('span', { class: 'affix' }, '%')),
+      hint ? h('span', { class: 'muted small' }, hint) : null,
     ));
   }
 
@@ -570,6 +596,22 @@ export async function mount(root) {
         contributionCostBox,
         snapshot.accounts.some((a) => a.taxStatus === 'hsa')
           ? selectRow('HSA coverage', filing.hsaCoverage, [['selfOnly', 'Self-only'], ['family', 'Family']], (v) => { filing.hsaCoverage = v; })
+          : null,
+        taxTables
+          ? checkboxRow(
+              'Use the standard investment order instead (match → HSA → Roth IRA → back to Traditional)',
+              plan.contributionWaterfallEnabled,
+              (v) => { plan.contributionWaterfallEnabled = v; },
+            )
+          : null,
+        plan.contributionWaterfallEnabled
+          ? h('div', {},
+              settingRow('waterfallBudget', 'Waterfall budget', plan.contributionMode === 'percentOfIncome' ? 'percent' : 'money', false),
+              percentFieldRow('Employer match rate', () => plan.matchRate, (v) => { plan.matchRate = v; }, 'e.g. 100% = dollar-for-dollar match'),
+              percentFieldRow('Match cap (% of pay)', () => plan.matchCapPercent, (v) => { plan.matchCapPercent = v; }, 'e.g. 4% = matched up to 4% of your pay'),
+              h('p', { class: 'muted small' },
+                "Fills one budget across accounts in priority order: your first Traditional-type account up to the match, then your first HSA to its max, then your first Roth account up to the Roth IRA limit (phased out at higher incomes), then back to the Traditional account for whatever's left of the budget — each capped by its own real IRS limit. Assumes the Roth account is a Roth IRA, not a Roth 401(k) (which shares Traditional's much bigger limit). If you have more than one account of a given type, only the first participates; the rest keep using their own \"Annual contribution\" setting above. The employer match is free money on top — it doesn't come out of your budget."),
+            )
           : null,
         settingRow('inflation', 'Inflation', 'percent', false),
         settingRow('wageGrowth', 'Wage growth', 'percent', false),

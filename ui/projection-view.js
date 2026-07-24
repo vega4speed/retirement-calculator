@@ -127,6 +127,7 @@ function buildChart(result) {
     ];
     if (r.phase === 'accumulation') {
       if (r.totals.contribution) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.contribution)} contributed`));
+      if (r.totals.employerMatch) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.employerMatch)} employer match`));
       if (r.totals.tax) {
         const marginal = r.totals.marginalRate != null ? `${(r.totals.marginalRate * 100).toFixed(0)}% marginal` : '';
         const effective = r.totals.effectiveTaxRate != null ? `${(r.totals.effectiveTaxRate * 100).toFixed(1)}% effective` : '';
@@ -210,8 +211,9 @@ function buildTable(result, opts = {}) {
   const hasTax = rows.some((r) => r.totals.tax);
   const hasAge = rows.some((r) => r.age != null);
   const hasConversion = rows.some((r) => r.totals.conversion);
+  const hasMatch = rows.some((r) => r.totals.employerMatch);
   const { expandedYear, onToggleExpand, bracketBreakdownFor } = opts;
-  const colCount = 6 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasConversion ? 1 : 0);
+  const colCount = 6 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0);
 
   const bodyRows = [];
   for (const r of rows) {
@@ -228,6 +230,7 @@ function buildTable(result, opts = {}) {
       h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       hasAge ? h('td', { class: 'r' }, r.age ?? '—') : null,
       h('td', { class: 'r' }, r.totals.contribution ? usdFull(r.totals.contribution) : '—'),
+      hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? usdFull(r.totals.employerMatch) : '—') : null,
       h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(r.totals.withdrawal) : '—'),
       taxCell,
       hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(r.totals.netSpendable) : '—') : null,
@@ -246,6 +249,7 @@ function buildTable(result, opts = {}) {
       h('th', {}, 'Year'), h('th', {}, 'Phase'),
       hasAge ? h('th', { class: 'r' }, 'Age') : null,
       h('th', { class: 'r' }, 'Contribution'),
+      hasMatch ? h('th', { class: 'r' }, 'Employer match') : null,
       h('th', { class: 'r' }, 'Withdrawal'),
       hasTax ? h('th', { class: 'r' }, 'Tax') : null,
       hasTax ? h('th', { class: 'r' }, 'Net spendable') : null,
@@ -283,6 +287,7 @@ export function createProjectionView(opts = {}) {
     const retRow = r.years.find((y) => y.year === r.retirementYear) || r.years[0];
     const endRow = r.years[r.years.length - 1];
     const contributed = r.years.reduce((sn, y) => sn + (y.totals.contribution || 0), 0);
+    const employerMatchTotal = r.years.reduce((sn, y) => sn + (y.totals.employerMatch || 0), 0);
     // Tax/effective-rate/conversion aggregates are computed ONCE in project() (see its docs) and
     // reused here rather than re-derived — the scenario-comparison table (scenarios.js) uses the
     // exact same fields, so both are guaranteed consistent by construction, not by convention.
@@ -298,6 +303,7 @@ export function createProjectionView(opts = {}) {
         survivalTile(r),
         statTile("At retirement · today's dollars", usd(retRow.real.endBalance), `${r.retirementYear} · in ${yrs} yr${yrs === 1 ? '' : 's'}`, COL.real),
         statTile('Total contributed', usd(contributed), 'over the accumulation years'),
+        employerMatchTotal > 0 ? statTile('Employer match', usd(employerMatchTotal), 'free money, on top of what you contributed') : null,
         // Under 'maxSustainable', ending balance is always ~$0 by construction (that's what the
         // solver targets) — showing it as a headline number is misleading, not just uninteresting.
         // The actually meaningful number for this strategy is the spend it solved for.

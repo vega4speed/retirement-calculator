@@ -140,6 +140,17 @@ treatment: a "max out" option fills the account to that year's actual IRS limit 
 Security/Medicare tax too — a real advantage a Traditional 401(k)/IRA never gets, regardless of
 how you contribute.
 
+**The standard investment order.** A common savings strategy: contribute to your 401(k) up to the
+employer match (free money), then max your HSA, then contribute to a Roth IRA up to its limit,
+then go back to your 401(k) for anything left of what you'd planned to save. Rather than
+computing each of those numbers by hand, turn on "the standard investment order" and set one
+overall budget (a flat $ or a % of income) — the calculator fills each step in order, respecting
+that step's real IRS limit, before moving to the next: 401(k) up to your match, HSA to its real
+max, Roth IRA up to its limit (reduced or eliminated at higher incomes, per the real IRS
+phase-out), then back to the 401(k) for whatever's left, capped by its own real annual limit.
+Employer match is modeled separately as free money on top of your own contribution, shown as its
+own stat tile and table column.
+
 In progress: couple/spousal Social Security (the remaining v1-boundary item).
 
 Known simplifications, documented in the code: state tax is a flat rate (no state brackets);
@@ -158,7 +169,12 @@ toggle, a scope-control simplification rather than a hard requirement; HSA contr
 are indexed by the same rate as the standard deduction (a reasonable proxy, tracking close to
 recent real growth) rather than the IRS's own lumpier formula; self-employed HSA/payroll-tax
 differences aren't modeled — a known gap for later, since self-employment tax works entirely
-differently from W-2 payroll withholding.
+differently from W-2 payroll withholding; the investment-order waterfall assumes a single-tier
+employer match ("100% up to 4% of pay") rather than a real multi-tier formula, and fills accounts
+by type (your first 401(k)/HSA/Roth account) rather than letting you assign specific accounts to
+specific steps; the Roth IRA income phase-out uses your gross income as a stand-in for the real
+MAGI calculation, and the combined employer + employee 401(k) contribution limit (around $70k)
+isn't modeled — only your own employee contribution limit is.
 
 > **Note:** `data/tax-tables.json` 2025/2026 figures are verified against IRS Rev. Proc. 2025-32
 > and cross-checked secondary sources (see the file's `_meta`). RMD divisors past age 100 are

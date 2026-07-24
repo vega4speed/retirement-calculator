@@ -21,13 +21,22 @@
 // See the design doc §4.1a for the full writeup.
 
 import { resolve } from './resolver.js';
-import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity, requiredBeginningAge, rmdAmount, cumulativeFactor, bracketTopForRate, marginalRateForIncome, grossUpDeduction, hsaContributionLimit } from './tax.js';
+import {
+  resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity,
+  requiredBeginningAge, rmdAmount, cumulativeFactor, bracketTopForRate, marginalRateForIncome,
+  grossUpDeduction, hsaContributionLimit, iraContributionLimit, electiveDeferralLimit, rothIraPhaseOutFactor,
+} from './tax.js';
+import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from './socialsecurity.js';
 
 // Combined employee-side Social Security (6.2%) + Medicare (1.45%) payroll tax rate. A flat
 // approximation (no wage-base cap, no Additional Medicare Tax threshold) -- see project.js's
 // contribution docs for why this only matters for HSA-via-payroll, never for 401(k)/IRA.
 const DEFAULT_FICA_RATE = 0.0765;
-import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from './socialsecurity.js';
+// Standard employer-match assumption for the contribution waterfall below: 100% match up to 4%
+// of pay. Plain constants, not resolver settings (a scope simplification -- a per-year-varying
+// match formula is a real but unlikely need; see the contribution-waterfall docs).
+const DEFAULT_MATCH_RATE = 1.0;
+const DEFAULT_MATCH_CAP_PERCENT = 0.04;
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
@@ -39,6 +48,112 @@ function rowTotals(accounts, extraKeys) {
     for (const k of Object.keys(t)) t[k] += num(a[k]);
   }
   return t;
+}
+
+/**
+ * The standard "investment order" waterfall (design doc, Phase 6.7): given ONE overall take-home
+ * budget for the year, fill four tiers in priority order -- Traditional up to the employer match,
+ * HSA to its max, Roth IRA to its (phase-out-adjusted) limit, then back to Traditional for
+ * whatever's left of the budget -- rather than the caller typing a separate number into each
+ * account's own `contributions` setting. Reuses the SAME account-role convention Roth conversions
+ * already use: "the first account of this taxStatus" (a v1/single-person scope simplification --
+ * if you have multiple accounts of the same status, only the first participates in the waterfall;
+ * the others keep using their own independent `contributions` setting, composed into the SAME
+ * shared tax-deferred deduction pool afterward by projectAccumulation's caller).
+ *
+ * Tier 3 assumes the "roth" account is a ROTH IRA (the smaller, separate IRS limit), not a Roth
+ * 401(k) (which would share the SAME big limit as Traditional, and wouldn't need a "switch back
+ * to Traditional" step at all) -- a real, documented assumption, not a general Roth-account cap.
+ *
+ * Employer match is NOT part of your own budget -- it's free money added on top, tracked
+ * separately (`employerMatchByAccount`), and never touches `runningBefore`: it was never your
+ * wages to begin with, so it never touched your taxable income (unlike your own elective
+ * deferral, which reduces Box 1 wages).
+ *
+ * @param {object} p
+ * @param {{id:string, taxStatus:string, hsaViaPayroll?:boolean}[]} p.accounts
+ * @param {number} p.income        this year's nominal income
+ * @param {number|null} p.age
+ * @param {number} p.runningBefore taxable income position BEFORE the waterfall's own deductions
+ *   (income - standard deduction, net of anything already deducted ahead of it)
+ * @param {object} p.yearTable     resolved via tax.resolveYearTable
+ * @param {'mfj'|'single'|'hoh'} p.filingStatus
+ * @param {number} p.ficaRate
+ * @param {'selfOnly'|'family'} p.hsaCoverage
+ * @param {number} [p.matchRate]        fraction of the employee's tier-1 contribution matched; default DEFAULT_MATCH_RATE
+ * @param {number} [p.matchCapPercent]  fraction of income eligible for match; default DEFAULT_MATCH_CAP_PERCENT
+ * @param {number} p.budget             this year's overall NET take-home budget
+ * @param {object} p.fixedTables        tax-tables.json's `fixed` block (for hsaContributionLimit)
+ * @returns {{contributionByAccount:Record<string,number>, employerMatchByAccount:Record<string,number>, claimedAccountIds:Set<string>, runningBefore:number}}
+ */
+function computeContributionWaterfall(p) {
+  const { accounts, income, age, filingStatus, ficaRate, hsaCoverage, yearTable, fixedTables } = p;
+  const matchRate = p.matchRate ?? DEFAULT_MATCH_RATE;
+  const matchCapPercent = p.matchCapPercent ?? DEFAULT_MATCH_CAP_PERCENT;
+  const brackets = yearTable.ordinaryBrackets[filingStatus];
+
+  const contributionByAccount = {};
+  const employerMatchByAccount = {};
+  const claimedAccountIds = new Set();
+  let runningBefore = p.runningBefore;
+  let remainingBudget = Math.max(0, num(p.budget));
+
+  const taxSavedFor = (gross) =>
+    ordinaryTax(runningBefore, filingStatus, yearTable) - ordinaryTax(Math.max(0, runningBefore - gross), filingStatus, yearTable);
+
+  // Fund up to `desiredGross` from the current tier -- fully, if the remaining budget covers its
+  // full net cost, or partially (whatever the remaining budget grosses up to) otherwise. Returns
+  // the ACTUAL gross amount funded; mutates runningBefore/remainingBudget as a side effect.
+  const fundTier = (desiredGross, tierFicaRate) => {
+    if (desiredGross <= 1e-9 || remainingBudget <= 1e-9) return 0;
+    const netCostFull = desiredGross * (1 - tierFicaRate) - taxSavedFor(desiredGross);
+    if (netCostFull <= remainingBudget + 1e-9) {
+      runningBefore = Math.max(0, runningBefore - desiredGross);
+      remainingBudget -= netCostFull;
+      return desiredGross;
+    }
+    const actual = grossUpDeduction(remainingBudget, runningBefore, brackets, tierFicaRate);
+    runningBefore = Math.max(0, runningBefore - actual);
+    remainingBudget = 0;
+    return actual;
+  };
+
+  const tier1Account = accounts.find((a) => a.taxStatus === 'taxDeferred');
+  const hsaAccount = accounts.find((a) => a.taxStatus === 'hsa');
+  const rothAccount = accounts.find((a) => a.taxStatus === 'roth');
+
+  let electiveRoom = tier1Account ? electiveDeferralLimit(age, yearTable) : 0;
+  if (tier1Account) {
+    claimedAccountIds.add(tier1Account.id);
+    const matchCap = matchCapPercent * income;
+    const tier1Desired = Math.min(matchCap, electiveRoom);
+    const tier1Actual = fundTier(tier1Desired, 0);
+    contributionByAccount[tier1Account.id] = tier1Actual;
+    employerMatchByAccount[tier1Account.id] = tier1Actual * matchRate;
+    electiveRoom -= tier1Actual;
+  }
+
+  if (hsaAccount) {
+    claimedAccountIds.add(hsaAccount.id);
+    const hsaViaPayroll = hsaAccount.hsaViaPayroll !== false;
+    const hsaCap = hsaContributionLimit(hsaCoverage, age, yearTable, fixedTables);
+    contributionByAccount[hsaAccount.id] = fundTier(hsaCap, hsaViaPayroll ? ficaRate : 0);
+  }
+
+  if (rothAccount) {
+    claimedAccountIds.add(rothAccount.id);
+    const rothCap = iraContributionLimit(age, yearTable) * rothIraPhaseOutFactor(income, filingStatus, yearTable);
+    // Roth: no deduction, no gross-up -- straight dollar-for-dollar against the remaining budget.
+    const rothActual = Math.min(Math.max(0, rothCap), remainingBudget);
+    contributionByAccount[rothAccount.id] = rothActual;
+    remainingBudget -= rothActual;
+  }
+
+  if (tier1Account && electiveRoom > 1e-9) {
+    contributionByAccount[tier1Account.id] += fundTier(electiveRoom, 0);
+  }
+
+  return { contributionByAccount, employerMatchByAccount, claimedAccountIds, runningBefore };
 }
 
 /**
@@ -218,11 +333,32 @@ export function projectAccumulation(p) {
     // in accounts-array order (see the contribution-semantics docs above) rather than
     // independently. Everything else (roth/taxable/cash) is dollar-for-dollar, no gross-up.
     const contributionByAccount = {};
+    const employerMatchByAccount = {};
     if (taxMode) {
       const brackets = yearTable.ordinaryBrackets[p.filingStatus];
       let runningBefore = Math.max(0, income - stdDeduction);
+      // The contribution waterfall (Phase 6.7, opt-in) claims up to 3 accounts (first taxDeferred,
+      // first hsa, first roth) and computes their contributions FIRST, from one shared take-home
+      // budget -- see computeContributionWaterfall's docs. Claimed accounts are then SKIPPED by
+      // the normal per-account loop below, which continues from wherever the waterfall left
+      // `runningBefore` for any remaining tax-advantaged accounts (still one shared deduction pool).
+      const claimedByWaterfall = new Set();
+      if (p.contributionWaterfallEnabled) {
+        const rawBudget = num(resolve(p.waterfallBudget ?? { default: 0 }, { year }));
+        const budget = contributionMode === 'percentOfIncome' ? rawBudget * income : rawBudget * cumWage;
+        const wf = computeContributionWaterfall({
+          accounts, income, age, runningBefore, yearTable, fixedTables: p.taxTables.fixed,
+          filingStatus: p.filingStatus, ficaRate, hsaCoverage,
+          matchRate: p.matchRate, matchCapPercent: p.matchCapPercent, budget,
+        });
+        Object.assign(contributionByAccount, wf.contributionByAccount);
+        Object.assign(employerMatchByAccount, wf.employerMatchByAccount);
+        for (const id of wf.claimedAccountIds) claimedByWaterfall.add(id);
+        runningBefore = wf.runningBefore;
+      }
       for (const a of accounts) {
         if (a.taxStatus !== 'taxDeferred' && a.taxStatus !== 'hsa') continue;
+        if (claimedByWaterfall.has(a.id)) continue;
         const viaPayroll = a.taxStatus === 'hsa' && a.hsaViaPayroll !== false;
         const accountFicaRate = viaPayroll ? ficaRate : 0;
         if (a.taxStatus === 'hsa' && a.hsaMaxOut) {
@@ -244,6 +380,7 @@ export function projectAccumulation(p) {
       taxableIncome = runningBefore;
       for (const a of accounts) {
         if (a.taxStatus === 'taxDeferred' || a.taxStatus === 'hsa') continue;
+        if (claimedByWaterfall.has(a.id)) continue;
         const raw = num(resolve(contributions, { accountId: a.id, year }));
         contributionByAccount[a.id] = contributionMode === 'percentOfIncome' ? raw * income : raw * cumWage;
       }
@@ -301,16 +438,19 @@ export function projectAccumulation(p) {
     for (const a of accounts) {
       const startBalance = bal[a.id];
       const contribution = contributionByAccount[a.id];
+      const employerMatch = employerMatchByAccount[a.id] || 0;
       const remainder = startBalance + conversionFlow[a.id];
       const r = num(resolve(returnRate, { accountId: a.id, year }));
       const growth = remainder * r;
-      const endBalance = remainder + growth + contribution;
+      // Employer match is free money on top of your own contribution -- lands in the account the
+      // same as a contribution, but isn't yours (see computeContributionWaterfall's docs).
+      const endBalance = remainder + growth + contribution + employerMatch;
       bal[a.id] = endBalance;
       // netCost: informational take-home-pay cost for tax-advantaged accounts (see the
       // contribution-semantics docs above) -- undefined for roth/taxable/cash, where the
       // contribution figure already IS the take-home cost (no gross-up to report).
       const netCost = netContributionCost[a.id];
-      acc[a.id] = { startBalance, contribution, netCost, conversion: conversionFlow[a.id], growth, endBalance };
+      acc[a.id] = { startBalance, contribution, employerMatch, netCost, conversion: conversionFlow[a.id], growth, endBalance };
       if (netCost != null) netContributionCostTotal += netCost;
     }
     // NOT auto-summed via rowTotals: acc[id].conversion is SIGNED (negative on the source
@@ -320,7 +460,7 @@ export function projectAccumulation(p) {
     // acc[id].netCost is untouched by rowTotals too (only listed keys get summed) -- it's
     // `undefined` for non-tax-advantaged accounts, and naively coercing that to 0 would blur "no
     // gross-up to report" with "a real $0 take-home cost"; summed explicitly below instead.
-    const totals = rowTotals(acc, ['contribution']);
+    const totals = rowTotals(acc, ['contribution', 'employerMatch']);
     totals.conversion = conversionAmount;
     totals.netContributionCost = netContributionCostTotal;
     totals.income = income;
@@ -906,6 +1046,13 @@ export function projectDecumulation(p) {
  * @param {'dollar'|'percentOfIncome'} [p.contributionMode] accumulation only; default 'dollar'
  * @param {'selfOnly'|'family'} [p.hsaCoverage] accumulation only; default 'selfOnly'
  * @param {number} [p.ficaRate] accumulation only; default 0.0765
+ * @param {boolean} [p.contributionWaterfallEnabled] accumulation only (Phase 6.7) — see
+ *   computeContributionWaterfall's docs
+ * @param {object} [p.waterfallBudget] accumulation only, household-level setting (not per-account)
+ *   read the same way as p.contributions per p.contributionMode; the waterfall's overall take-home
+ *   budget for the year
+ * @param {number} [p.matchRate] accumulation only; default 1.0 (100% match)
+ * @param {number} [p.matchCapPercent] accumulation only; default 0.04 (4% of pay)
  * @param {object} [p.wageGrowth]     accumulation only
  * @param {object} [p.spending]       decumulation only
  * @param {object} [p.otherIncome]    decumulation only
@@ -974,6 +1121,8 @@ export function project(p) {
     income: p.earnings, filingStatus: p.filingStatus, taxTables: p.taxTables, anchorYear: p.anchorYear,
     bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,
     stateTaxRate: p.stateTaxRate, birthYear: p.birthYear, hsaCoverage: p.hsaCoverage, ficaRate: p.ficaRate,
+    contributionWaterfallEnabled: p.contributionWaterfallEnabled, waterfallBudget: p.waterfallBudget,
+    matchRate: p.matchRate, matchCapPercent: p.matchCapPercent,
     rothConversionsEnabled: p.rothConversionsEnabled, bracketFillRate: p.bracketFillRate,
   });
   const lastAccRow = acc.years[acc.years.length - 1];

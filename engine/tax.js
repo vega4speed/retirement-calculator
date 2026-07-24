@@ -279,12 +279,64 @@ export function resolveYearTable(p) {
     },
     // Reuses the SAME standardDeductionIndexingRate as the standard deduction above -- see
     // hsaContributionLimit's docs for why this is a reasonable stand-in for the real (lumpier)
-    // IRS HSA indexing formula rather than a dedicated one.
+    // IRS HSA indexing formula rather than a dedicated one. The same reasoning + rate now also
+    // covers the IRA/Roth IRA limit, the 401(k) elective deferral limit, and the Roth IRA
+    // phase-out thresholds below (design doc / contribution-waterfall docs in project.js).
     hsaLimit: anchor.hsaLimits ? {
       selfOnly: anchor.hsaLimits.selfOnly * sf,
       family: anchor.hsaLimits.family * sf,
     } : undefined,
+    iraLimit: anchor.iraLimits ? {
+      base: anchor.iraLimits.base * sf,
+      catchUp: anchor.iraLimits.catchUp * sf,
+    } : undefined,
+    electiveDeferralLimit: anchor.electiveDeferralLimit ? {
+      base: anchor.electiveDeferralLimit.base * sf,
+      catchUp: anchor.electiveDeferralLimit.catchUp * sf,
+      enhancedCatchUp: anchor.electiveDeferralLimit.enhancedCatchUp * sf,
+    } : undefined,
+    rothIraPhaseOut: anchor.rothIraPhaseOut ? {
+      single: { start: anchor.rothIraPhaseOut.single.start * sf, end: anchor.rothIraPhaseOut.single.end * sf },
+      mfj: { start: anchor.rothIraPhaseOut.mfj.start * sf, end: anchor.rothIraPhaseOut.mfj.end * sf },
+    } : undefined,
   };
+}
+
+/** This year's IRA/Roth IRA contribution limit, including the 50+ catch-up (itself indexed,
+ * unlike HSA's fixed catch-up — SECURE 2.0 started indexing it in 2024). */
+export function iraContributionLimit(age, yearTable) {
+  const base = num(yearTable.iraLimit?.base);
+  const catchUp = Number.isFinite(age) && age >= 50 ? num(yearTable.iraLimit?.catchUp) : 0;
+  return base + catchUp;
+}
+
+/**
+ * This year's 401(k)/403(b) elective deferral limit, including catch-up. SECURE 2.0's "enhanced"
+ * catch-up applies ONLY to ages 60-63 (not 50+ generally) and REPLACES the standard catch-up for
+ * those ages, rather than stacking on top of it.
+ */
+export function electiveDeferralLimit(age, yearTable) {
+  const base = num(yearTable.electiveDeferralLimit?.base);
+  if (!Number.isFinite(age) || age < 50) return base;
+  const enhanced = age >= 60 && age <= 63;
+  return base + num(yearTable.electiveDeferralLimit?.[enhanced ? 'enhancedCatchUp' : 'catchUp']);
+}
+
+/**
+ * The fraction (0-1) of the full IRA limit you're allowed to contribute to a ROTH ira, given MAGI
+ * (approximated here by gross income — a documented simplification, same precision level as the
+ * rest of this app's income modeling) and filing status. 1 at/below the range's start, 0 at/above
+ * its end, linear in between (the real IRS rule rounds to the nearest $10 with a $200 floor unless
+ * fully phased out — skipped here as noise-level over a multi-decade projection). Head-of-household
+ * uses the SAME range as single (the IRS doesn't publish a separate HOH range for this).
+ */
+export function rothIraPhaseOutFactor(magi, filingStatus, yearTable) {
+  const range = yearTable.rothIraPhaseOut?.[filingStatus === 'mfj' ? 'mfj' : 'single'];
+  if (!range) return 1;
+  const m = Math.max(0, num(magi));
+  if (m <= range.start) return 1;
+  if (m >= range.end) return 0;
+  return (range.end - m) / (range.end - range.start);
 }
 
 /** Federal ordinary-income tax for a filing status, given a resolved yearTable (see resolveYearTable). */

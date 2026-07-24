@@ -54,6 +54,12 @@ function paramsFor(state, taxTables) {
       // HSA contribution limit (Phase 6.6): coverage tier only matters once there's a real
       // bracket table to index the limit against, hence gated the same as the rest of tax mode.
       hsaCoverage: filing.hsaCoverage,
+      // Contribution waterfall (Phase 6.7): needs real IRS limits + brackets, so it's gated the
+      // same way as the rest of tax mode too.
+      contributionWaterfallEnabled: !!plan.contributionWaterfallEnabled,
+      waterfallBudget: assumptions.waterfallBudget,
+      matchRate: plan.matchRate,
+      matchCapPercent: plan.matchCapPercent,
       // Social Security (Phase 5) is opt-in within tax mode: needs earnings + claiming age.
       earnings: assumptions.earnings, careerStartYear: social.careerStartYear, claimingAge: social.claimingAge,
       colaRate: assumptions.colaRate,
