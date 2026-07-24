@@ -214,27 +214,36 @@ function buildTable(result, opts = {}) {
   const hasMatch = rows.some((r) => r.totals.employerMatch);
   const { expandedYear, onToggleExpand, bracketBreakdownFor } = opts;
   const getAccountLabel = opts.getAccountLabel || ((id) => id);
+  const mode = opts.mode === 'real' ? 'real' : 'nominal'; // 'nominal' | 'real' (today's $)
 
-  // Per-account contribution breakdown (only accounts that ever actually contribute or get a
-  // match, across the accumulation years -- an account that's never funded doesn't earn a column).
-  // Order follows the accounts' own insertion order in each row (== the original account order).
+  // Every dollar figure here is nominal-by-construction in the engine; "today's $" is always
+  // exactly nominal ÷ that row's cumulativeInflation (the SAME transform project.js uses for
+  // real.endBalance) -- recomputing it at display time, uniformly for every column, is simpler
+  // and provably consistent than threading a second "real" field through the engine for every
+  // total. A ratio (the %-of-income annotations below) is invariant either way, so those are
+  // always computed from the raw nominal figures regardless of `mode`.
+  const val = (v, r) => (mode === 'real' ? (v || 0) / (r.cumulativeInflation || 1) : (v || 0));
+  const pct = (v, income) => (income > 1e-9 ? ` (${((v / income) * 100).toFixed(1)}%)` : '');
+
+  // One column per account that exists during accumulation -- NOT filtered to "ever funded" (a
+  // filtered-out account silently vanishing from the table, rather than showing a column full of
+  // "—", was confusing: you can't tell "this account type isn't supported here" apart from "this
+  // account genuinely got $0" without the column existing to look at).
   const accumRows = rows.filter((r) => r.phase !== 'decumulation');
-  const perAccountIds = accumRows.length
-    ? Object.keys(accumRows[0].accounts).filter((id) =>
-        accumRows.some((r) => (r.accounts[id]?.contribution || 0) > 1e-9 || (r.accounts[id]?.employerMatch || 0) > 1e-9))
-    : [];
+  const perAccountIds = accumRows.length ? Object.keys(accumRows[0].accounts) : [];
 
-  const colCount = 6 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0) + perAccountIds.length;
+  const colCount = 7 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0) + perAccountIds.length;
 
   const bodyRows = [];
   for (const r of rows) {
+    const income = r.totals.grossIncome || 0;
     const clickableTax = hasTax && bracketBreakdownFor && r.phase === 'decumulation' && r.totals.tax > 0.005;
     const taxCell = !hasTax ? null
       : !r.totals.tax ? h('td', { class: 'r' }, '—')
       : clickableTax
         ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year) },
-            usdFull(r.totals.tax), ' ', expandedYear === r.year ? '▾' : '▸'))
-        : h('td', { class: 'r' }, usdFull(r.totals.tax));
+            usdFull(val(r.totals.tax, r)), pct(r.totals.tax, income), ' ', expandedYear === r.year ? '▾' : '▸'))
+        : h('td', { class: 'r' }, usdFull(val(r.totals.tax, r)), pct(r.totals.tax, income));
 
     const perAccountCells = perAccountIds.map((id) => {
       const a = r.accounts[id];
@@ -242,8 +251,8 @@ function buildTable(result, opts = {}) {
       const match = a?.employerMatch || 0;
       if (contribution <= 1e-9 && match <= 1e-9) return h('td', { class: 'r' }, '—');
       return h('td', { class: 'r' },
-        h('div', {}, usdFull(contribution)),
-        match > 1e-9 ? h('div', { class: 'muted small' }, `+${usdFull(match)} match`) : null,
+        h('div', {}, usdFull(val(contribution, r))),
+        match > 1e-9 ? h('div', { class: 'muted small' }, `+${usdFull(val(match, r))} match`) : null,
       );
     });
 
@@ -251,16 +260,16 @@ function buildTable(result, opts = {}) {
       h('td', {}, r.year),
       h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       hasAge ? h('td', { class: 'r' }, r.age ?? '—') : null,
-      h('td', { class: 'r' }, r.totals.contribution ? usdFull(r.totals.contribution) : '—'),
-      hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? usdFull(r.totals.employerMatch) : '—') : null,
+      hasTax ? h('td', { class: 'r' }, income ? usdFull(val(income, r)) : '—') : null,
+      h('td', { class: 'r' }, r.totals.contribution ? [usdFull(val(r.totals.contribution, r)), pct(r.totals.contribution, income)] : '—'),
+      hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? usdFull(val(r.totals.employerMatch, r)) : '—') : null,
       ...perAccountCells,
-      h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(r.totals.withdrawal) : '—'),
+      h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(val(r.totals.withdrawal, r)) : '—'),
       taxCell,
-      hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(r.totals.netSpendable) : '—') : null,
-      hasConversion ? h('td', { class: 'r' }, r.totals.conversion ? usdFull(r.totals.conversion) : '—') : null,
-      h('td', { class: 'r' }, usdFull(r.totals.growth)),
-      h('td', { class: 'r' }, usdFull(r.totals.endBalance)),
-      h('td', { class: 'r' }, usdFull(r.real.endBalance)),
+      hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(val(r.totals.netSpendable, r)) : '—') : null,
+      hasConversion ? h('td', { class: 'r' }, r.totals.conversion ? usdFull(val(r.totals.conversion, r)) : '—') : null,
+      h('td', { class: 'r' }, usdFull(val(r.totals.growth, r))),
+      h('td', { class: 'r' }, usdFull(val(r.totals.endBalance, r))),
     ));
     if (clickableTax && expandedYear === r.year) {
       bodyRows.push(bracketDetailRow(colCount, bracketBreakdownFor(r)));
@@ -271,7 +280,8 @@ function buildTable(result, opts = {}) {
     h('thead', {}, h('tr', {},
       h('th', {}, 'Year'), h('th', {}, 'Phase'),
       hasAge ? h('th', { class: 'r' }, 'Age') : null,
-      h('th', { class: 'r' }, 'Contribution'),
+      hasTax ? h('th', { class: 'r' }, 'Income') : null,
+      h('th', { class: 'r' }, 'Total contribution'),
       hasMatch ? h('th', { class: 'r' }, 'Employer match') : null,
       ...perAccountIds.map((id) => h('th', { class: 'r' }, getAccountLabel(id))),
       h('th', { class: 'r' }, 'Withdrawal'),
@@ -279,7 +289,7 @@ function buildTable(result, opts = {}) {
       hasTax ? h('th', { class: 'r' }, 'Net spendable') : null,
       hasConversion ? h('th', { class: 'r' }, 'Roth conversion') : null,
       h('th', { class: 'r' }, 'Growth'),
-      h('th', { class: 'r' }, 'Balance (nominal)'), h('th', { class: 'r' }, "Balance (today's)"))),
+      h('th', { class: 'r' }, mode === 'real' ? "Balance (today's $)" : 'Balance (nominal)'))),
     h('tbody', {}, ...bodyRows),
   );
   return h('div', { class: 'table-scroll' }, table);
@@ -292,6 +302,7 @@ export function createProjectionView(opts = {}) {
   let showTable = false;
   let expandedYear = null;
   let current = null;
+  let tableMode = 'nominal'; // 'nominal' | 'real' -- see buildTable's docs
 
   function render() {
     // A toggle (Show table / expand a Tax cell) fully rebuilds this view's DOM. Clearing and
@@ -343,6 +354,10 @@ export function createProjectionView(opts = {}) {
       buildChart(r),
       h('div', { class: 'table-toggle' },
         h('button', { class: 'ghost', onclick: () => { showTable = !showTable; render(); } }, showTable ? 'Hide table' : 'Show table'),
+        showTable
+          ? h('button', { class: 'ghost', onclick: () => { tableMode = tableMode === 'nominal' ? 'real' : 'nominal'; render(); } },
+              `Table: ${tableMode === 'real' ? "today's $" : 'nominal'} (switch)`)
+          : null,
       ),
     ];
     if (showTable) {
@@ -350,6 +365,7 @@ export function createProjectionView(opts = {}) {
         expandedYear,
         bracketBreakdownFor,
         getAccountLabel,
+        mode: tableMode,
         onToggleExpand: (year) => { expandedYear = expandedYear === year ? null : year; render(); },
       }));
     }

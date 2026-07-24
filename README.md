@@ -150,8 +150,10 @@ max, Roth IRA up to its limit (reduced or eliminated at higher incomes, per the 
 phase-out), then back to the 401(k) for whatever's left, capped by its own real annual limit.
 Employer match is modeled separately as free money on top of your own contribution, shown as its
 own stat tile and table column. The projection table also shows a column per account during your
-working years (contribution + any match, for any account that's actually funded), so you can see
-exactly where each year's money went without doing the math by hand.
+working years (contribution + any match), an Income column, and %-of-income next to your
+Total-contribution and Tax figures — so you can see exactly where each year's money went without
+doing the math by hand. A toggle switches the whole table between nominal dollars and today's
+dollars.
 
 In progress: couple/spousal Social Security (the remaining v1-boundary item).
 

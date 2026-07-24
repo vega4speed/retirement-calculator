@@ -247,13 +247,29 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          conversion too, not just the contribution) + a table (both phases, sticky
                          headers, an age column when birthYear is known, a Roth-conversion column
                          and an Employer-match column when relevant, PLUS one column per account
-                         during accumulation years (only accounts that ever actually get a
-                         contribution or match — an unused account earns no column), each cell
-                         showing that account's own contribution with any employer match as a
-                         small sub-line; requires `opts.getAccountLabel(id)` from the caller
+                         during accumulation years — NOT filtered to "ever funded" (a filtered-out
+                         account silently disappearing from the table was confusing: you can't
+                         tell "unsupported here" from "genuinely $0" without the column to look
+                         at, the exact bug behind a user report of a missing HSA column) — each
+                         cell showing that account's own contribution with any employer match as
+                         a small sub-line; requires `opts.getAccountLabel(id)` from the caller
                          (app.js supplies `snapshot.accounts.find(...).label || id`) so headers
-                         show real names, not raw account ids — and a clickable Tax cell that
-                         expands a per-bracket breakdown row — including what the standard
+                         show real names, not raw account ids. Also: an "Income" column
+                         (`totals.grossIncome`, the SAME field both phases' lifetime aggregates
+                         already use — reused here rather than re-derived) with %-of-income
+                         annotations on Total contribution and Tax (a ratio, so invariant to the
+                         nominal/today's-$ toggle below); "Contribution" renamed "Total
+                         contribution" now that per-account columns sit right next to it. A
+                         nominal/today's-$ toggle for the WHOLE table (labeled "Table: nominal" /
+                         "Table: today's $") — recomputes every dollar column at DISPLAY time as
+                         nominal ÷ that row's cumulativeInflation (the same transform project.js
+                         itself uses for real.endBalance) rather than threading a second real-
+                         valued field through the engine for every total; collapses the old
+                         separate "Balance (nominal)"/"Balance (today's)" pair into ONE column
+                         that follows the toggle — and a clickable Tax cell that expands a
+                         per-bracket breakdown row (still nominal-only regardless of the table
+                         toggle — a known, minor inconsistency, not wired up) — including what the
+                         standard
                          deduction sheltered, plus a marginal-vs-effective-rate line — the whole
                          view preserves scroll position, both the page's own AND the table's own
                          internal scroll container, across re-renders)
