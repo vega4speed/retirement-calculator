@@ -15,7 +15,7 @@ test('baseline row holds current balances with no flows', () => {
     returnRate: { default: 0.1 },
   });
   assert.equal(r.years.length, 1);
-  assert.deepEqual(r.years[0].totals, { startBalance: 100000, contribution: 0, growth: 0, endBalance: 100000 });
+  assert.deepEqual(r.years[0].totals, { startBalance: 100000, contribution: 0, growth: 0, endBalance: 100000, conversion: 0 });
   assert.equal(r.years[0].real.endBalance, 100000);
 });
 

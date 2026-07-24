@@ -106,10 +106,24 @@ column, and chart-hover line show what happened, and it's comparable across scen
 
 **Pre-retirement tax rate.** A snapshot (not a multi-year projection) of today's marginal and
 effective tax rate, from the same earnings figure the Social Security estimate uses, compared
-against your projected retirement lifetime effective rate — with a plain-language verdict on
-whether traditional (tax-deferred) or Roth contributions look more tax-efficient for you right
-now. The standard financial-planning heuristic for that decision, not a full income-growth
-projection through your working years.
+against your projected retirement effective rate — with a plain-language verdict on whether
+traditional (tax-deferred) or Roth contributions look more tax-efficient for you right now. The
+standard financial-planning heuristic for that decision.
+
+**Working-years income & tax, and Roth conversions while you work.** Beyond that snapshot, the
+projection now models your actual working years year by year: income (your earnings setting
+growing with wages), the real tax deduction your 401(k)/IRA contributions earn you, tax,
+marginal rate, and effective rate — so you can see whether paying more tax now to defer it (or
+vice versa) is a genuine trade-off for your numbers, or just adds to your lifetime tax bill. The
+same Roth-conversion feature above now also runs during your working years (opt in by picking
+"fill to the top of a bracket" as your withdrawal order) — converting unused bracket room from
+tax-deferred to Roth, paid for out of take-home pay instead of a portfolio withdrawal. In
+practice this is usually $0 while working full-time (a full salary already fills a modest
+bracket on its own) and shows up mainly in a lower-income working year — a part-time stretch, a
+gap year, or early in a career. Because working years can carry their own tax now, the "lifetime"
+tax figures are joined by retirement-only ones (used for the trad-vs-Roth verdict above, so it
+isn't diluted by pre-retirement tax) and a combined "working + retired" total is shown whenever
+it actually differs from the retirement-only figure.
 
 In progress: couple/spousal Social Security (the remaining v1-boundary item).
 
@@ -122,9 +136,11 @@ reasoning); the FICA wage-base cap isn't modeled (high earners' PIA is modestly 
 Social Security only starts once decumulation begins, even if your claiming age is earlier;
 taxable-account cost basis is a constant fraction from your snapshot, not grown through
 contributions; HSA non-medical penalties and Roth early-withdrawal rules aren't modeled; light
-theme only (no dark mode); the pre-retirement tax snapshot is a single point in time, not a
-year-by-year working-years projection, and doesn't feed a %-of-income contribution mode (still
-blocked on real income modeling, per §4.1a).
+theme only (no dark mode); contributions are still a fixed dollar amount, not a %-of-income mode
+(still blocked on real income modeling, per §4.1a — now that working-years income modeling
+exists, this is the next natural piece); working-years Roth conversions are gated behind picking
+"fill to the top of a bracket" as your withdrawal order rather than having their own independent
+toggle, a scope-control simplification rather than a hard requirement.
 
 > **Note:** `data/tax-tables.json` 2025/2026 figures are verified against IRS Rev. Proc. 2025-32
 > and cross-checked secondary sources (see the file's `_meta`). RMD divisors past age 100 are

@@ -105,6 +105,27 @@ export function marginalRateForIncome(taxableIncome, brackets) {
   return brackets[brackets.length - 1]?.rate ?? 0;
 }
 
+/**
+ * The standard traditional-vs-Roth heuristic: compare the rate paid NOW (a working year's
+ * marginal rate, since a traditional contribution's tax savings land at that margin) against the
+ * rate paid LATER (retirement's overall effective rate, since a traditional withdrawal stacks
+ * across the whole bracket ladder, not just the top). If they're within `tolerance`, the two are
+ * close to mathematically equivalent (the classic result: if your rate now equals your rate
+ * later, pre-tax and post-tax contributions are worth the same). Otherwise, traditional wins when
+ * the CURRENT rate is higher (defer tax now, pay it later at a lower rate) and Roth wins when the
+ * current rate is lower (pay tax now at a bargain, avoid it later at a higher rate).
+ * @param {number} currentRate    this working year's marginal rate
+ * @param {number} laterRate      retirement's overall effective rate (or another year's marginal
+ *   rate, for a year-over-year comparison)
+ * @param {number} [tolerance] default 0.02 (2 percentage points)
+ * @returns {'traditional'|'roth'|'wash'}
+ */
+export function traditionalVsRothVerdict(currentRate, laterRate, tolerance = 0.02) {
+  const diff = num(currentRate) - num(laterRate);
+  if (Math.abs(diff) < tolerance) return 'wash';
+  return diff > 0 ? 'traditional' : 'roth';
+}
+
 function scaleBrackets(brackets, factor) {
   return brackets.map((b) => ({ upTo: b.upTo == null ? null : b.upTo * factor, rate: b.rate }));
 }

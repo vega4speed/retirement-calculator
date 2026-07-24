@@ -21,7 +21,7 @@
 // See the design doc §4.1a for the full writeup.
 
 import { resolve } from './resolver.js';
-import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity, requiredBeginningAge, rmdAmount, cumulativeFactor, bracketTopForRate } from './tax.js';
+import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity, requiredBeginningAge, rmdAmount, cumulativeFactor, bracketTopForRate, marginalRateForIncome } from './tax.js';
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from './socialsecurity.js';
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -51,14 +51,51 @@ function rowTotals(accounts, extraKeys) {
  * Note: a per-year `contributions` override is ALSO escalated by wage growth — to pin exact
  * nominal contributions, set wageGrowth to 0.
  *
+ * PRE-TAX by default (unchanged since Phase 2): omit `income`/`filingStatus`/`taxTables` and
+ * nothing below applies — every existing Phase 2/3 golden-number test stays valid unchanged.
+ *
+ * TAX-AWARE, opt-in (Phase 6.5): with `filingStatus` + `taxTables` + `anchorYear` supplied, each
+ * working year also computes a real federal tax bill on `income` (the SAME wage-indexed-
+ * equivalent `earnings` setting Social Security draws on — one input, escalated to NOMINAL
+ * dollars for the year by cumulative wage growth, same convention `contributions` already uses).
+ * Contributions to `taxStatus:'taxDeferred'` accounts reduce THIS year's taxable income (the real
+ * 401k/IRA pre-tax deduction mechanic) — Roth/taxable/HSA/cash contributions don't. This is what
+ * actually makes "contribute Traditional vs Roth" a real, not just notional, choice: a Traditional
+ * contribution saves `contribution * thisYear'sMarginalRate` in tax right now.
+ *
+ * Roth conversions during accumulation (opt-in `rothConversionsEnabled` + `bracketFillRate`,
+ * same knobs as decumulation's — design doc §5, extended to the working years by request):
+ * whatever room is left in the chosen bracket after job income (net of tax-deferred
+ * contributions) gets converted from tax-deferred to Roth, using the ACCOUNT'S balance as of the
+ * START of the year (not this year's own contribution/growth). Unlike decumulation's version,
+ * there's no portfolio withdrawal to gross up — the conversion's tax is assumed paid from take-
+ * home pay / other savings (you have a job; that's the whole point of "accumulation"), so it's
+ * purely informational here, not funded from any modeled account. In practice this will often be
+ * $0 for someone working full-time: ordinary job income alone frequently already exceeds a
+ * modest bracket ceiling, leaving no room — that's a correct result, not a bug.
+ *
  * @param {object} p
  * @param {number} p.startYear       baseline (snapshot) year; row t=0 holds current balances
  * @param {number} p.endYear         last accumulation year (retirement); inclusive, >= startYear
- * @param {{id:string, balance:number}[]} p.accounts
+ * @param {{id:string, balance:number, taxStatus?:string}[]} p.accounts taxStatus is only used by
+ *   tax-aware mode (the deduction + conversion mechanics above); harmless to omit otherwise
  * @param {object} p.returnRate      setting (per account/year)
  * @param {object} [p.contributions] setting (base-year annual $ per account); default 0
  * @param {object} [p.wageGrowth]    setting (per year); default 0
  * @param {object} [p.inflation]     setting (per year); default 0
+ * @param {object} [p.income] setting (per year), wage-indexed-equivalent annual $ — enables
+ *   tax-aware mode together with filingStatus/taxTables/anchorYear
+ * @param {'mfj'|'single'|'hoh'} [p.filingStatus]
+ * @param {object} [p.taxTables] parsed tax-tables.json
+ * @param {number} [p.anchorYear] required if taxTables given — see tax.resolveYearTable
+ * @param {object} [p.bracketIndexingRate] setting; default 0
+ * @param {object} [p.standardDeductionIndexingRate] setting; default 0
+ * @param {number} [p.stateTaxRate] flat rate; default 0
+ * @param {number} [p.birthYear] enables the standard deduction's age-65 addition (rare during
+ *   working years, but kept consistent with decumulation's handling)
+ * @param {boolean} [p.rothConversionsEnabled] see the conversions section above
+ * @param {number} [p.bracketFillRate] the ordinary rate to fill up to; required with
+ *   rothConversionsEnabled (see tax.bracketTopForRate)
  * @returns {{baseYear:number, endYear:number, years:object[]}}
  */
 export function projectAccumulation(p) {
@@ -76,6 +113,11 @@ export function projectAccumulation(p) {
   const contributions = p.contributions ?? { default: 0 };
   const wageGrowth = p.wageGrowth ?? { default: 0 };
   const inflation = p.inflation ?? { default: 0 };
+  const taxMode = !!(p.income && p.filingStatus && p.taxTables);
+  if (taxMode && !Number.isInteger(p.anchorYear)) {
+    throw new Error('projectAccumulation: anchorYear is required when taxTables is provided');
+  }
+  const stateTaxRate = num(p.stateTaxRate);
 
   const bal = {};
   for (const a of accounts) bal[a.id] = num(a.balance);
@@ -86,9 +128,10 @@ export function projectAccumulation(p) {
   {
     const acc = {};
     for (const a of accounts) {
-      acc[a.id] = { startBalance: bal[a.id], contribution: 0, growth: 0, endBalance: bal[a.id] };
+      acc[a.id] = { startBalance: bal[a.id], contribution: 0, conversion: 0, growth: 0, endBalance: bal[a.id] };
     }
     const totals = rowTotals(acc, ['contribution']);
+    totals.conversion = 0;
     years.push({ year: startYear, t: 0, cumulativeInflation: 1, accounts: acc, totals, real: { endBalance: totals.endBalance } });
   }
 
@@ -99,17 +142,94 @@ export function projectAccumulation(p) {
     cumInflation *= 1 + num(resolve(inflation, { year }));
     cumWage *= 1 + num(resolve(wageGrowth, { year }));
 
+    // Pass 1: this year's contribution per account (doesn't touch balances yet — needed up front
+    // to know how much taxable income tax-deferred contributions shelter).
+    const contributionByAccount = {};
+    let taxDeferredContribution = 0;
+    for (const a of accounts) {
+      const c = num(resolve(contributions, { accountId: a.id, year })) * cumWage;
+      contributionByAccount[a.id] = c;
+      if (a.taxStatus === 'taxDeferred') taxDeferredContribution += c;
+    }
+
+    let income = 0, taxableIncome = 0, tax = 0, marginalRate = 0, effectiveTaxRate = 0, conversionAmount = 0, grossIncome = 0;
+    const conversionFlow = Object.fromEntries(accounts.map((a) => [a.id, 0]));
+    if (taxMode) {
+      income = num(resolve(p.income, { year })) * cumWage;
+      const age = Number.isInteger(p.birthYear) ? year - p.birthYear : null;
+      const yearTable = resolveYearTable({
+        tables: p.taxTables, year, anchorYear: p.anchorYear,
+        bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,
+      });
+      const stdDeduction = standardDeduction({ filingStatus: p.filingStatus, age65Count: age != null && age >= 65 ? 1 : 0, yearTable });
+      taxableIncome = Math.max(0, income - taxDeferredContribution - stdDeduction);
+
+      if (p.rothConversionsEnabled && p.bracketFillRate != null) {
+        const ceiling = bracketTopForRate(p.bracketFillRate, yearTable.ordinaryBrackets[p.filingStatus]);
+        const roomLeft = Math.max(0, ceiling - taxableIncome);
+        const tdAccounts = accounts.filter((a) => a.taxStatus === 'taxDeferred');
+        const tdStartBalance = tdAccounts.reduce((s, a) => s + Math.max(0, bal[a.id]), 0);
+        const targetId = accounts.find((a) => a.taxStatus === 'roth')?.id;
+        const desired = Math.min(roomLeft, tdStartBalance);
+        if (desired > 1e-9 && targetId) {
+          let remaining = desired;
+          for (const a of tdAccounts) {
+            if (remaining <= 0) break;
+            const avail = Math.max(0, bal[a.id]);
+            const take = Math.min(avail, remaining);
+            conversionFlow[a.id] -= take;
+            remaining -= take;
+          }
+          conversionAmount = desired - remaining;
+          conversionFlow[targetId] += conversionAmount;
+          taxableIncome += conversionAmount;
+        }
+      }
+
+      const fedTax = ordinaryTax(taxableIncome, p.filingStatus, yearTable);
+      tax = fedTax + stateTaxRate * taxableIncome;
+      marginalRate = marginalRateForIncome(taxableIncome, yearTable.ordinaryBrackets[p.filingStatus]);
+      // Denominator includes the conversion (money that moved and got taxed, even though it's a
+      // transfer between your own accounts rather than new income) — same convention
+      // decumulation's totals.grossIncome/effectiveTaxRate already use for ITS conversions
+      // (folded into totals.withdrawal there). Without this, a year with a big conversion but
+      // modest job income would show a misleadingly huge effective rate: e.g. $5,800 tax on
+      // $20,000 job income alone reads as 29%, but the $5,800 is really taxing $66,500 of total
+      // ordinary income (job + conversion) — 8.7%, the number that actually reflects what happened.
+      grossIncome = income + conversionAmount;
+      effectiveTaxRate = grossIncome > 1e-9 ? tax / grossIncome : 0;
+    }
+
+    // Pass 2: apply the conversion flow (if any), then growth, then this year's contribution —
+    // same "contributions land at year-end, no growth in the year they're made" convention as
+    // before; the conversion (a balance transfer, not new money) DOES grow this year, since it's
+    // effectively money that was already there, just relocated.
     const acc = {};
     for (const a of accounts) {
       const startBalance = bal[a.id];
+      const contribution = contributionByAccount[a.id];
+      const remainder = startBalance + conversionFlow[a.id];
       const r = num(resolve(returnRate, { accountId: a.id, year }));
-      const contribution = num(resolve(contributions, { accountId: a.id, year })) * cumWage;
-      const growth = startBalance * r;
-      const endBalance = startBalance * (1 + r) + contribution;
+      const growth = remainder * r;
+      const endBalance = remainder + growth + contribution;
       bal[a.id] = endBalance;
-      acc[a.id] = { startBalance, contribution, growth, endBalance };
+      acc[a.id] = { startBalance, contribution, conversion: conversionFlow[a.id], growth, endBalance };
     }
+    // NOT auto-summed via rowTotals: acc[id].conversion is SIGNED (negative on the source
+    // account, positive on the target), so a plain sum across accounts always nets to exactly
+    // zero (it's a transfer between two of the same household's accounts, not new money). What
+    // "how much was converted this year" actually means is the magnitude, tracked separately.
     const totals = rowTotals(acc, ['contribution']);
+    totals.conversion = conversionAmount;
+    totals.income = income;
+    totals.taxableIncome = taxableIncome;
+    totals.tax = tax;
+    totals.marginalRate = marginalRate;
+    totals.effectiveTaxRate = effectiveTaxRate;
+    // Mirrors decumulation's totals.grossIncome/effectiveTaxRate naming (and, like there,
+    // includes any conversion) so UI code and the lifetime aggregates in project() (below) can
+    // treat both phases' rows uniformly.
+    totals.grossIncome = grossIncome;
     years.push({
       year,
       t: year - startYear,
@@ -734,8 +854,17 @@ export function project(p) {
 
   const acc = projectAccumulation({
     startYear: baseYear, endYear: retirementYear,
-    accounts: accounts.map((a) => ({ id: a.id, balance: a.balance })),
+    accounts: accounts.map((a) => ({ id: a.id, balance: a.balance, taxStatus: a.taxStatus })),
     returnRate: p.returnRate, contributions: p.contributions, wageGrowth: p.wageGrowth, inflation: p.inflation,
+    // Pre-retirement tax mode (Phase 6.5): opt-in on the SAME inputs decumulation tax and Social
+    // Security already need — no separate toggle, consistent with how tax mode auto-activates
+    // below. Reuses `earnings` (the SS wage-indexed-equivalent figure) as the income driving
+    // this year's tax bill; see projectAccumulation's docs for the escalation convention and the
+    // taxDeferred-contribution-deduction / Roth-conversion mechanics.
+    income: p.earnings, filingStatus: p.filingStatus, taxTables: p.taxTables, anchorYear: p.anchorYear,
+    bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,
+    stateTaxRate: p.stateTaxRate, birthYear: p.birthYear,
+    rothConversionsEnabled: p.rothConversionsEnabled, bracketFillRate: p.bracketFillRate,
   });
   const lastAccRow = acc.years[acc.years.length - 1];
 
@@ -781,14 +910,25 @@ export function project(p) {
   // Lifetime aggregates, computed once here rather than re-derived by every UI consumer (the
   // projection view's stat tiles, the scenario-comparison table, and — Phase 6.5 — the
   // traditional-vs-Roth readout all need the same "total tax paid" / "total gross income" sums).
+  // WHOLE-PLAN (accumulation + decumulation) — now that accumulation years can carry real tax
+  // too (Phase 6.5), this genuinely spans your entire working + retired life, not just retirement.
   const lifetimeTax = years.reduce((s, y) => s + (y.totals.tax || 0), 0);
   const lifetimeGrossIncome = years.reduce((s, y) => s + (y.totals.grossIncome || 0), 0);
   const lifetimeEffectiveTaxRate = lifetimeGrossIncome > 0 ? lifetimeTax / lifetimeGrossIncome : 0;
   const lifetimeRothConversions = years.reduce((s, y) => s + (y.totals.conversion || 0), 0);
+  // DECUMULATION-ONLY — kept separate because the traditional-vs-Roth comparison specifically
+  // needs "what rate will this money face WHEN WITHDRAWN IN RETIREMENT," not a figure diluted by
+  // already-realized working-years tax (a different, already-sunk cost, not the retirement side
+  // of the trade-off).
+  const decYearsOnly = years.filter((y) => y.phase === 'decumulation');
+  const decumulationTax = decYearsOnly.reduce((s, y) => s + (y.totals.tax || 0), 0);
+  const decumulationGrossIncome = decYearsOnly.reduce((s, y) => s + (y.totals.grossIncome || 0), 0);
+  const decumulationEffectiveTaxRate = decumulationGrossIncome > 0 ? decumulationTax / decumulationGrossIncome : 0;
 
   return {
     baseYear, retirementYear, horizonYear, years, firstDepletionYear,
     lifetimeTax, lifetimeGrossIncome, lifetimeEffectiveTaxRate, lifetimeRothConversions,
+    decumulationTax, decumulationGrossIncome, decumulationEffectiveTaxRate,
   };
 }
 

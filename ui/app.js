@@ -13,7 +13,7 @@ import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
 import { resolve } from '../engine/resolver.js';
-import { resolveYearTable, bracketBreakdown, standardDeduction, ordinaryTax, marginalRateForIncome } from '../engine/tax.js';
+import { resolveYearTable, bracketBreakdown, standardDeduction, ordinaryTax, marginalRateForIncome, traditionalVsRothVerdict } from '../engine/tax.js';
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from '../engine/socialsecurity.js';
 import { projectFor, TAX_ANCHOR_YEAR } from './project-adapter.js';
 import { createScenariosView } from './scenarios.js';
@@ -409,16 +409,24 @@ export async function mount(root) {
   }
 
   // Traditional-vs-Roth guidance: compares TODAY's marginal tax rate (currentTaxSnapshot(), a
-  // snapshot) against the PROJECTED retirement lifetime effective rate (r.lifetimeEffectiveTaxRate,
-  // from the same project() call the chart/table use) — the standard heuristic for whether
-  // tax-deferred or Roth contributions are more tax-efficient for you. Persistent element updated
+  // simplified snapshot — see its docs) against the projected RETIREMENT-ONLY effective rate
+  // (r.decumulationEffectiveTaxRate — NOT r.lifetimeEffectiveTaxRate, which now also blends in
+  // working-years tax, Phase 6.5, and would badly mismeasure "the retirement side" of this
+  // specific comparison). Uses tax.traditionalVsRothVerdict() — the same pure engine helper — so
+  // this UI code doesn't carry its own copy of the win/lose/wash logic. Persistent element updated
   // from refreshProjection(), same shape/reason as ssEstimateBox and maxSustainableBox above.
+  //
+  // The FULL accumulation-phase tax trajectory (marginal rate every working year, not just this
+  // one snapshot; tax-deferred-contribution deductions; Roth conversions during accumulation) is
+  // now computed by the engine and visible in the projection chart's hover tooltip and table below
+  // — this readout stays a fast, prominent "today" verdict alongside that fuller picture, not a
+  // replacement for it.
   const taxComparisonBox = h('div');
   function updateTaxComparisonReadout(r) {
     clear(taxComparisonBox);
     const snap = currentTaxSnapshot();
     if (!snap || snap.income <= 0) return;
-    if (!r || !(r.lifetimeGrossIncome > 0)) {
+    if (!r || !(r.decumulationGrossIncome > 0)) {
       taxComparisonBox.append(h('div', { class: 'ss-estimate' },
         h('strong', {}, `Current marginal tax rate: ${(snap.marginalRate * 100).toFixed(0)}%`),
         ` (effective ${(snap.effectiveRate * 100).toFixed(1)}%) on ${usdShort(snap.income)} income in ${snap.year}.`,
@@ -426,19 +434,19 @@ export async function mount(root) {
       ));
       return;
     }
-    const retirementRate = r.lifetimeEffectiveTaxRate;
-    const diff = snap.marginalRate - retirementRate;
-    const verdict = Math.abs(diff) < 0.02
+    const retirementRate = r.decumulationEffectiveTaxRate;
+    const verdict = traditionalVsRothVerdict(snap.marginalRate, retirementRate);
+    const verdictText = verdict === 'wash'
       ? "roughly a wash — Traditional and Roth are close to equivalent for you at these rates"
-      : diff > 0
+      : verdict === 'traditional'
         ? 'Traditional (tax-deferred) contributions are likely more tax-efficient — you\'d defer tax at a higher rate now and pay it later at a lower one'
         : 'Roth contributions are likely more tax-efficient — you\'d pay tax now at a lower rate than you\'re projected to face in retirement';
     taxComparisonBox.append(h('div', { class: 'ss-estimate' },
       h('strong', {}, `Current marginal tax rate: ${(snap.marginalRate * 100).toFixed(0)}%`),
       ` (effective ${(snap.effectiveRate * 100).toFixed(1)}%) on ${usdShort(snap.income)} income in ${snap.year}, vs. a projected `,
-      h('strong', {}, `${(retirementRate * 100).toFixed(1)}% lifetime effective rate`),
-      ' in retirement.',
-      h('div', { class: 'muted small' }, `→ ${verdict}. This compares your current marginal rate to retirement's overall EFFECTIVE rate — the two aren't quite the same kind of number, but it's the standard comparison for this decision; a rough guide, not a precise optimum.`),
+      h('strong', {}, `${(retirementRate * 100).toFixed(1)}% effective rate in retirement`),
+      '.',
+      h('div', { class: 'muted small' }, `→ ${verdictText}. This compares your current marginal rate to retirement's overall EFFECTIVE rate — the two aren't quite the same kind of number, but it's the standard comparison for this decision; a rough guide, not a precise optimum. See the projection chart's hover and table below for your full tax trajectory year by year, including any working-years Roth conversions.`),
     ));
   }
 
@@ -535,6 +543,7 @@ export async function mount(root) {
               checkboxRow('Also convert unused bracket room to Roth', plan.rothConversionsEnabled,
                 (v) => { plan.rothConversionsEnabled = v; }),
               h('p', { class: 'muted small' }, "Roth conversions (design doc §5): in the gap years before you're forced to take RMDs, whatever room is left in the bracket above after covering your spending gets converted from tax-deferred to Roth instead of sitting unused — paying tax on it now, at today's (possibly lower) rate, so it shrinks future RMDs and grows tax-free forever after. The conversion is preserved in full; its own tax is paid from other accounts (via the withdrawal order above), not carved out of the converted amount. This raises this year's tax bill on purpose — see the Lifetime tax stat and the per-year breakdown below to judge the tradeoff."),
+              h('p', { class: 'muted small' }, "This checkbox also applies to your WORKING years, using the same chosen bracket, funded from take-home pay rather than a portfolio withdrawal — see the projection chart's hover and table for whether any room actually shows up there. In practice it's usually $0 while working full-time: ordinary job income alone often already exceeds a modest bracket, leaving nothing to convert — a correct result, not a bug. It's most likely to matter in a lower-income working year (part-time, a gap year, early in a career)."),
             )
           : null,
       ),

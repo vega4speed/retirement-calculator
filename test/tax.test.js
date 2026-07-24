@@ -10,6 +10,7 @@ import {
   bracketBreakdown,
   bracketTopForRate,
   marginalRateForIncome,
+  traditionalVsRothVerdict,
   resolveYearTable,
   ordinaryTax,
   standardDeduction,
@@ -193,4 +194,21 @@ test('marginalRateForIncome: zero or negative income is the bottom bracket\'s ra
   const t2026 = resolveYearTable({ tables: realTables, year: 2026, anchorYear: 2026 });
   approx(marginalRateForIncome(0, t2026.ordinaryBrackets.single), 0.10);
   approx(marginalRateForIncome(-500, t2026.ordinaryBrackets.single), 0.10);
+});
+
+test('traditionalVsRothVerdict: higher rate now favors traditional, lower rate now favors Roth', () => {
+  assert.equal(traditionalVsRothVerdict(0.24, 0.12), 'traditional');
+  assert.equal(traditionalVsRothVerdict(0.10, 0.22), 'roth');
+});
+
+test('traditionalVsRothVerdict: within tolerance of each other is a wash', () => {
+  assert.equal(traditionalVsRothVerdict(0.12, 0.121), 'wash');
+  assert.equal(traditionalVsRothVerdict(0.12, 0.12), 'wash');
+  assert.equal(traditionalVsRothVerdict(0.12, 0.139), 'wash'); // just under the default 2pt tolerance
+  assert.equal(traditionalVsRothVerdict(0.12, 0.141), 'roth'); // just over it
+});
+
+test('traditionalVsRothVerdict: tolerance is configurable', () => {
+  assert.equal(traditionalVsRothVerdict(0.12, 0.10, 0.005), 'traditional'); // 2pt gap, tight 0.5pt tolerance
+  assert.equal(traditionalVsRothVerdict(0.12, 0.10, 0.05), 'wash'); // same gap, loose 5pt tolerance
 });

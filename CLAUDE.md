@@ -25,7 +25,11 @@ engine/               pure calculation modules (unit-tested)
                          an indexing-rate setting, same pattern as inflation in project.js;
                          bracketBreakdown() powers the table's clickable-Tax-cell detail view;
                          marginalRateForIncome() — inverse of bracketTopForRate, taxable income
-                         -> marginal rate — powers the pre-retirement tax-rate readout)
+                         -> marginal rate — powers the pre-retirement tax-rate readout and
+                         projectAccumulation()'s per-year marginalRate; traditionalVsRothVerdict()
+                         — pure current-rate-vs-later-rate -> 'traditional'|'roth'|'wash', with a
+                         configurable tolerance for "close enough to call it a wash" — extracted
+                         from app.js's inline verdict logic)
   project.js            accumulation + decumulation, tax-aware — DONE (spending, withdrawal
                          strategy, tax-status sequencing, RMD forcing, capital-gains stacking,
                          gross-up, portfolio survival, Social Security income + taxation, and
@@ -60,7 +64,34 @@ engine/               pure calculation modules (unit-tested)
                          carries lifetimeTax / lifetimeGrossIncome / lifetimeEffectiveTaxRate /
                          lifetimeRothConversions — computed ONCE here rather than re-derived by
                          every UI consumer (projection-view.js's stat tiles and scenarios.js's
-                         comparison table both use these directly now).
+                         comparison table both use these directly now). Also carries
+                         decumulationTax / decumulationGrossIncome / decumulationEffectiveTaxRate
+                         — the SAME aggregates filtered to decumulation-only years, added once
+                         accumulation could carry its own tax (below) so "lifetime" would
+                         otherwise dilute the "what rate will this money face in retirement"
+                         comparison the trad-vs-Roth verdict needs.
+                         projectAccumulation() (DONE): year-by-year working-years income + tax,
+                         opt-in on income/filingStatus/taxTables (omit any and it's exactly
+                         Phase 2's pre-tax accumulation, unchanged). Per year: income (the
+                         `earnings` setting escalated by cumulative wage growth — note this is a
+                         DIFFERENT interpretation of the same raw setting than estimatePIA's,
+                         which applies no escalation; an intentional, documented divergence since
+                         the two consumers transform the input differently for different
+                         purposes), taxableIncome (income minus tax-deferred contributions —
+                         the real 401k/IRA pre-tax deduction — minus the standard deduction),
+                         tax, marginalRate (via new marginalRateForIncome), effectiveTaxRate
+                         (tax ÷ gross income, gross including any conversion). Accumulation-phase
+                         Roth conversions reuse the SAME rothConversionsEnabled/bracketFillRate
+                         knobs as decumulation, deliberately coupled to plan.sequencing ===
+                         'bracketFill' for scope control even though accumulation has no real
+                         "sequencing" concept (documented simplification). Mechanically simpler
+                         than decumulation's version — no gross-up needed, since a working person
+                         pays the conversion's tax out of take-home pay, not a portfolio
+                         withdrawal — just a signed conversionFlow map (negative on the
+                         tax-deferred source, positive on the Roth target) applied before growth.
+                         In practice usually $0 for a full-time salary (job income alone already
+                         exceeds a modest bracket) — most likely to show up in a lower-income
+                         working year (part-time, a gap year, early career).
   socialsecurity.js     earnings → AIME → PIA → claiming → COLA/haircut — DONE (implemented +
                          tested). fullRetirementAge() (1983-Amendments table), estimatePIA()
                          (bend-point formula on a "wage-indexed-equivalent" earnings setting —
@@ -79,9 +110,13 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          lighter onEdit() path instead). currentTaxSnapshot(): a single point-in-
                          time (not multi-year) estimate of TODAY's marginal/effective tax rate
                          from the same `earnings` setting Social Security already uses, compared
-                         against the projected retirement lifetime effective rate for a plain-
-                         language traditional-vs-Roth verdict — deliberately NOT a year-by-year
-                         pre-retirement income/tax ledger (see the Status section).
+                         against the projected retirement DECUMULATION-ONLY effective rate (not the
+                         whole-plan lifetime one, which would now be diluted by accumulation's
+                         own tax) via the new traditionalVsRothVerdict() helper in tax.js — kept
+                         even after project.js grew a real year-by-year accumulation tax ledger,
+                         since this snapshot is self-contained and works without a
+                         retirementYear > baseYear (see the Status section for how the two
+                         relate).
   project-adapter.js    projectFor(state, taxTables) — the ONE place that maps the app's
                          {snapshot, assumptions, plan, filing, social} state shape to a
                          project() call. Shared by app.js (the live editor) and scenarios.js
@@ -117,16 +152,21 @@ ui/                   vanilla-JS UI (no framework, no deps)
   accounts-editor.js    enter/edit accounts, tax statuses, balances, cost basis
   setting-control.js    the reusable Simple/Expand knob (supports `perAccount:false` for
                          household-level settings like spending), with a live resolved preview
-  projection-view.js    stat tiles (incl. portfolio survival, lifetime tax, lifetime effective
-                         tax rate, lifetime Roth conversions) + the two-series chart (today's $
+  projection-view.js    stat tiles (portfolio survival; "Lifetime tax in retirement" +
+                         "Lifetime effective tax rate" now use project()'s decumulation-only
+                         aggregates, not the whole-plan ones, since accumulation can carry tax
+                         too now; a "Total tax, working + retired" tile appears only when that
+                         whole-plan figure actually differs from the decumulation-only one;
+                         "Converted to Roth" sums both phases) + the two-series chart (today's $
                          vs nominal, retirement marker, hover tooltip shows age + that year's
-                         effective tax rate + any Roth conversion) + a table (both phases,
-                         sticky headers, an age column when birthYear is known, a Roth-conversion
-                         column when relevant, and a clickable Tax cell that expands a per-bracket
-                         breakdown row — including what the standard deduction sheltered, plus a
-                         marginal-vs-effective-rate line — the whole view preserves scroll
-                         position, both the page's own AND the table's own internal scroll
-                         container, across re-renders)
+                         effective tax rate + any Roth conversion — accumulation-phase rows now
+                         show income/tax/marginal/effective + any conversion too, not just the
+                         contribution) + a table (both phases, sticky headers, an age column when
+                         birthYear is known, a Roth-conversion column when relevant, and a
+                         clickable Tax cell that expands a per-bracket breakdown row — including
+                         what the standard deduction sheltered, plus a marginal-vs-effective-rate
+                         line — the whole view preserves scroll position, both the page's own AND
+                         the table's own internal scroll container, across re-renders)
   chart-utils.js         shared chart primitives (usd/usdFull formatters, niceCeil axis rounding,
                          xTickYears, the fixed non-categorical COL tokens) — factored out in
                          Phase 7 so projection-view.js's chart and scenarios.js's comparison
@@ -136,9 +176,10 @@ data/                 tax-tables.json (verified 2025/2026 figures) + EXAMPLE tem
 schemas/              JSON Schemas for profile / snapshot / scenario — scaffolding from Phase 0,
                        predates the app's actual (simpler) state shape; not wired up (see
                        scenarios.js above)
-test/                 node:test suites (smoke, resolver, accumulation, decumulation, tax,
-                       decumulation-tax, socialsecurity, social-security-decumulation,
-                       bracket-fill, max-sustainable, roth-conversions) — 123 passing.
+test/                 node:test suites (smoke, resolver, accumulation, accumulation-tax,
+                       decumulation, tax, decumulation-tax, socialsecurity,
+                       social-security-decumulation, bracket-fill, max-sustainable,
+                       roth-conversions) — 134 passing.
 ```
 
 ## Running
@@ -186,7 +227,23 @@ dollars with a retirement marker, a hover tooltip that now includes age, and tab
 (tax/net-spendable/age/Roth-conversion columns, sticky headers, clickable per-bracket Tax detail
 showing the standard deduction + marginal-vs-effective rate) — the whole view preserves scroll
 position across re-renders now, so expanding a table row no longer jumps you back to the top.
-In progress: couple/spousal Social Security (the remaining v1-boundary item from §13).
+**Pre-retirement accumulation-phase tax modeling** (2026-07-24): the working years now carry a
+real year-by-year income/tax ledger, not just the point-in-time snapshot above — each year's
+income (earnings escalated by wage growth), taxable income (net of the real 401k/IRA pre-tax
+contribution deduction and the standard deduction), tax, marginal rate, and effective rate. This
+is what actually answers the original question ("is paying higher tax now to defer worth it, or
+does it just add to lifetime tax burden") with real numbers instead of a single snapshot.
+**Roth conversions during accumulation**: the same opt-in bracket-fill conversion mechanism from
+decumulation now also runs during working years (gated behind the same `bracketFill` sequencing
+selection) — funded from take-home pay instead of a portfolio withdrawal, so no gross-up is
+needed; usually $0 for a full salary (job income alone typically exceeds a modest bracket) and
+most likely to show up in a lower-income working year. Because accumulation can now carry its own
+tax, `project()`'s lifetime tax aggregates would dilute the "what rate will this money face in
+retirement" comparison the trad-vs-Roth verdict needs — so it now also returns
+decumulation-only aggregates, and both the verdict readout and the "Lifetime tax in retirement"
+stat tile were repointed to those; a new "Total tax, working + retired" tile shows the whole-plan
+figure only when it actually differs. In progress: couple/spousal Social Security (the remaining
+v1-boundary item from §13).
 
 **Fixed 2026-07-22 (two small UI bugs):**
 1. Clicking a Tax cell to expand its per-bracket breakdown — or toggling "Show table" — fully
@@ -212,10 +269,12 @@ wage-indexed-equivalent, not real historical dollars run through the actual SSA 
 FICA wage-base cap isn't modeled; SS only starts once decumulation begins even if claimed
 earlier; taxable-account cost basis is a constant fraction from the snapshot, not grown through
 contributions; HSA/Roth early-withdrawal penalties not modeled; light theme only; the
-pre-retirement tax snapshot is a single point in time (today's income vs. today's brackets), not
-a year-by-year working-years tax projection — no income-growth or bracket-creep trajectory
-through the accumulation phase, and it doesn't feed back into contribution amounts or a
-%-of-income contribution mode (still blocked on that, per §4.1a).
+pre-retirement snapshot readout (today's marginal/effective rate) is still a single point in
+time, kept alongside the newer year-by-year accumulation ledger rather than replaced by it
+(self-contained, doesn't need retirementYear > baseYear); accumulation contributions are still a
+fixed $ amount, not a %-of-income mode (still blocked on that, per §4.1a); accumulation-phase
+Roth conversions are gated behind selecting `bracketFill` decumulation sequencing rather than
+having their own independent toggle — a scope-control simplification, not a hard requirement.
 
 > `data/tax-tables.json` 2025/2026 figures are VERIFIED (IRS Rev. Proc. 2025-32 + cross-checked
 > secondary sources, see `_meta`). RMD divisors past age 100 are unverified approximations.

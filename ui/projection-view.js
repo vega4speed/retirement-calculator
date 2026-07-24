@@ -125,7 +125,15 @@ function buildChart(result) {
       h('div', {}, h('span', { class: 'sw', style: { background: COL.real } }), `Today's: ${usdFull(r.real.endBalance)}`),
       h('div', {}, h('span', { class: 'sw', style: { background: COL.nominal } }), `Nominal: ${usdFull(r.totals.endBalance)}`),
     ];
-    if (r.phase === 'accumulation' && r.totals.contribution) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.contribution)} contributed`));
+    if (r.phase === 'accumulation') {
+      if (r.totals.contribution) lines.push(h('div', { class: 'tip-sub' }, `+ ${usdFull(r.totals.contribution)} contributed`));
+      if (r.totals.tax) {
+        const marginal = r.totals.marginalRate != null ? `${(r.totals.marginalRate * 100).toFixed(0)}% marginal` : '';
+        const effective = r.totals.effectiveTaxRate != null ? `${(r.totals.effectiveTaxRate * 100).toFixed(1)}% effective` : '';
+        lines.push(h('div', { class: 'tip-sub' }, `Income ${usdFull(r.totals.income)} · tax ${usdFull(r.totals.tax)} (${marginal}, ${effective})`));
+      }
+      if (r.totals.conversion) lines.push(h('div', { class: 'tip-sub' }, `↷ ${usdFull(r.totals.conversion)} converted to Roth`));
+    }
     if (r.phase === 'decumulation') {
       lines.push(h('div', { class: 'tip-sub' }, `− ${usdFull(r.totals.withdrawal)} withdrawn`));
       if (r.totals.tax) {
@@ -275,10 +283,13 @@ export function createProjectionView(opts = {}) {
     const retRow = r.years.find((y) => y.year === r.retirementYear) || r.years[0];
     const endRow = r.years[r.years.length - 1];
     const contributed = r.years.reduce((sn, y) => sn + (y.totals.contribution || 0), 0);
-    // Lifetime tax/effective-rate/conversions are computed ONCE in project() (see its docs) and
+    // Tax/effective-rate/conversion aggregates are computed ONCE in project() (see its docs) and
     // reused here rather than re-derived — the scenario-comparison table (scenarios.js) uses the
     // exact same fields, so both are guaranteed consistent by construction, not by convention.
-    const { lifetimeTax, lifetimeEffectiveTaxRate: lifetimeEffectiveRate, lifetimeRothConversions: lifetimeConversions } = r;
+    // decumulationTax/-EffectiveTaxRate stay scoped to "in retirement" (this tile's label); the
+    // WHOLE-PLAN lifetime figures (which now also include working-years tax, Phase 6.5) get their
+    // own tile below so neither number silently absorbs the other.
+    const { decumulationTax, decumulationEffectiveTaxRate, lifetimeTax, lifetimeEffectiveTaxRate, lifetimeRothConversions: lifetimeConversions } = r;
     const growth = retRow.totals.endBalance - startTotal - contributed;
     const yrs = r.retirementYear - r.baseYear;
 
@@ -293,9 +304,10 @@ export function createProjectionView(opts = {}) {
         r.solvedSpending != null
           ? statTile("Annual spend · today's $", usd(r.solvedSpending), 'maximum sustainable through ' + r.horizonYear, COL.real)
           : statTile("End of plan · today's dollars", usd(endRow.real.endBalance), `${r.horizonYear}`, endRow.real.endBalance > 0 ? COL.real : COL.critical),
-        lifetimeTax > 0 ? statTile('Lifetime tax in retirement', usd(lifetimeTax), 'nominal, federal + state') : null,
-        lifetimeTax > 0 ? statTile('Lifetime effective tax rate', `${(lifetimeEffectiveRate * 100).toFixed(1)}%`, 'total tax ÷ total gross income — compare across strategies') : null,
-        lifetimeConversions > 0 ? statTile('Converted to Roth', usd(lifetimeConversions), 'nominal, in the gap years before RMDs', COL.real) : null,
+        decumulationTax > 0 ? statTile('Lifetime tax in retirement', usd(decumulationTax), 'nominal, federal + state') : null,
+        decumulationTax > 0 ? statTile('Lifetime effective tax rate', `${(decumulationEffectiveTaxRate * 100).toFixed(1)}%`, 'total tax ÷ total gross income, in retirement') : null,
+        lifetimeTax > decumulationTax ? statTile('Total tax, working + retired', usd(lifetimeTax), `${(lifetimeEffectiveTaxRate * 100).toFixed(1)}% effective, your whole plan`) : null,
+        lifetimeConversions > 0 ? statTile('Converted to Roth', usd(lifetimeConversions), 'nominal, working + retired years') : null,
       ),
       buildChart(r),
       h('div', { class: 'table-toggle' },
