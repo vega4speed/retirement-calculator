@@ -13,7 +13,7 @@ import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
 import { resolve } from '../engine/resolver.js';
-import { resolveYearTable, bracketBreakdown, standardDeduction, ordinaryTax, marginalRateForIncome, traditionalVsRothVerdict } from '../engine/tax.js';
+import { resolveYearTable, bracketBreakdown, standardDeduction, ordinaryTax, marginalRateForIncome, traditionalVsRothVerdict, grossUpDeduction } from '../engine/tax.js';
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from '../engine/socialsecurity.js';
 import { projectFor, TAX_ANCHOR_YEAR } from './project-adapter.js';
 import { createScenariosView } from './scenarios.js';
@@ -46,6 +46,7 @@ const defaultAssumptions = () => ({
 const defaultFiling = () => ({
   filingStatus: 'single',
   birthYear: new Date().getFullYear() - 45,
+  hsaCoverage: 'selfOnly', // 'selfOnly' | 'family' -- HDHP coverage tier, drives the HSA max-out limit
 });
 
 const defaultSocial = (birthYear) => ({
@@ -80,6 +81,7 @@ export async function mount(root) {
     sequencing: 'conventional',  // 'conventional' | 'proportional' | 'bracketFill'
     bracketFillRate: 0.12,       // 'bracketFill' only: which ordinary bracket to fill up to
     rothConversionsEnabled: false, // 'bracketFill' only: also convert unused room to Roth
+    contributionMode: 'dollar',  // 'dollar' | 'percentOfIncome' -- see engine/project.js's docs
   };
 
   const acctSummary = () => snapshot.accounts.map((a) => ({ id: a.id, label: a.label || a.id }));
@@ -146,7 +148,7 @@ export async function mount(root) {
     const tax = ordinaryTax(taxableIncome, filing.filingStatus, yearTable);
     const marginalRate = marginalRateForIncome(taxableIncome, yearTable.ordinaryBrackets[filing.filingStatus]);
     const effectiveRate = income > 0 ? tax / income : 0;
-    return { year, income, tax, marginalRate, effectiveRate };
+    return { year, income, taxableIncome, tax, marginalRate, effectiveRate };
   }
 
   const projectionView = createProjectionView({ bracketBreakdownFor });
@@ -199,6 +201,7 @@ export async function mount(root) {
     plan.sequencing = 'conventional';
     plan.bracketFillRate = 0.12;
     plan.rothConversionsEnabled = false;
+    plan.contributionMode = 'dollar';
     rebuild();
   }
 
@@ -225,6 +228,7 @@ export async function mount(root) {
     updateMaxSustainableReadout(r);
     updateSocialSecurityReadout();
     updateTaxComparisonReadout(r);
+    updateContributionCostReadout();
   }
 
   // --- helpers -------------------------------------------------------------
@@ -450,6 +454,44 @@ export async function mount(root) {
     ));
   }
 
+  // "Annual contribution" (and its % equivalent) is now your TAKE-HOME cost, not the gross $ that
+  // lands in a Traditional/HSA account (see engine/project.js's contribution-semantics docs) — a
+  // one-line "here's what that actually buys today" readout so the number in the input box isn't
+  // a mystery before you ever look at the projection table. Uses currentTaxSnapshot()'s already-
+  // resolved yearTable/taxableIncome (a real EXACT position for TODAY, not an approximation) with
+  // tax.grossUpDeduction — the SAME exact bracket-walk the engine itself uses — so this is a real
+  // number, not a flat-marginal-rate estimate. It only illustrates the DEFAULT contribution value
+  // (not every per-account/per-year override) and doesn't reflect multiple pooled accounts or an
+  // HSA max-out limit — the projection table below computes the exact, complete version of this
+  // per year. Persistent element, same reason/shape as the other readouts on this page.
+  const contributionCostBox = h('div');
+  function updateContributionCostReadout() {
+    clear(contributionCostBox);
+    const snap = currentTaxSnapshot();
+    if (!snap || !taxTables) return;
+    const rawDefault = Number(assumptions.contributions?.default) || 0;
+    if (rawDefault <= 0) return;
+    const netCost = plan.contributionMode === 'percentOfIncome' ? rawDefault * snap.income : rawDefault;
+    if (netCost <= 0) return;
+    const yearTable = resolveYearTable({
+      tables: taxTables, year: snap.year, anchorYear: TAX_ANCHOR_YEAR,
+      bracketIndexingRate: assumptions.inflation, standardDeductionIndexingRate: assumptions.inflation,
+    });
+    const brackets = yearTable.ordinaryBrackets[filing.filingStatus];
+    const grossTraditional = grossUpDeduction(netCost, snap.taxableIncome, brackets, 0);
+    const grossHsaPayroll = grossUpDeduction(netCost, snap.taxableIncome, brackets, 0.0765);
+    const netLabel = plan.contributionMode === 'percentOfIncome' ? `${(rawDefault * 100).toFixed(1)}% of income (${usdShort(netCost)})` : usdShort(netCost);
+    contributionCostBox.append(h('div', { class: 'ss-estimate' },
+      h('strong', {}, `${netLabel} of take-home pay`),
+      ' — a Roth contribution puts exactly that much in the account. A Traditional contribution puts about ',
+      h('strong', {}, usdShort(grossTraditional)),
+      ' in instead (it shields itself from tax); an HSA via payroll puts about ',
+      h('strong', {}, usdShort(grossHsaPayroll)),
+      ' in (it also skips FICA).',
+      h('div', { class: 'muted small' }, `At today's ${(snap.marginalRate * 100).toFixed(0)}% marginal rate — illustrates only the default value above, not per-account overrides or an HSA max-out limit. See the projection table below for the exact per-year, per-account figures.`),
+    ));
+  }
+
   function selectRow(label, value, options, onSet) {
     const select = h('select', {
       onchange: (e) => { onSet(e.target.value); onEdit(); rebuild(); },
@@ -508,10 +550,27 @@ export async function mount(root) {
         settingRow('stateTaxRate', 'State income tax rate (flat)', 'percent', false),
       ),
       section('3 · Working years',
-        h('p', { class: 'muted' }, 'Set one value, or Expand any knob to override it per account and/or per year. Contributions are the base-year annual amount, escalated by wage growth.'),
+        h('p', { class: 'muted' }, 'Set one value, or Expand any knob to override it per account and/or per year. Contributions are the base-year annual amount (or % of income), escalated by wage growth.'),
         yearRow('Retirement year', () => plan.retirementYear, (v) => { plan.retirementYear = v; if (plan.horizonYear < v) plan.horizonYear = v; }, baseYear),
         settingRow('returnRate', 'Rate of return', 'percent', true),
-        settingRow('contributions', 'Annual contribution', 'money', true),
+        selectRow('Contribution amount is a', plan.contributionMode, [
+          ['dollar', 'Dollar amount (base-year $, escalated by wage growth)'],
+          ['percentOfIncome', '% of income'],
+        ], (v) => {
+          // The stored number means something totally different in the two modes ($10,000 vs.
+          // 1,000,000% if left as-is) -- reset to a sensible default for the new mode rather than
+          // silently misinterpreting whatever was there (also drops existing overrides, which
+          // would be equally nonsensical reinterpreted; there's no sane auto-conversion since
+          // dollar overrides don't have a single income figure to divide by per account/year).
+          plan.contributionMode = v;
+          assumptions.contributions = { default: v === 'percentOfIncome' ? 0.15 : 0 };
+        }),
+        settingRow('contributions', 'Annual contribution', plan.contributionMode === 'percentOfIncome' ? 'percent' : 'money', true),
+        h('p', { class: 'muted small' }, "For Traditional and HSA accounts, this is your TAKE-HOME cost, not the amount that lands in the account — it's grossed up to the larger pre-tax amount, since those contributions shield themselves from tax. Roth/taxable/cash accounts get exactly this amount, dollar for dollar."),
+        contributionCostBox,
+        snapshot.accounts.some((a) => a.taxStatus === 'hsa')
+          ? selectRow('HSA coverage', filing.hsaCoverage, [['selfOnly', 'Self-only'], ['family', 'Family']], (v) => { filing.hsaCoverage = v; })
+          : null,
         settingRow('inflation', 'Inflation', 'percent', false),
         settingRow('wageGrowth', 'Wage growth', 'percent', false),
         h('p', { class: 'muted small' }, 'Current tax rate, and whether traditional or Roth contributions make more sense for you — based on the "Annual earnings" figure in the Social Security section below (the same real income, used once).'),

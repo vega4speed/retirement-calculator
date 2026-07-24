@@ -47,9 +47,13 @@ test('basic tax on job income alone, no contributions: exact bracket math', () =
   approx(y.totals.effectiveTaxRate, 6570 / 70000);
 });
 
-test('a tax-deferred contribution reduces taxable income (the real 401k/IRA deduction)', () => {
-  // taxableIncome = 70000 - 10000(contribution) - 16100 = 43900 -> entirely in the 12% bracket
-  // tax = 1240 + (43900-12400)*0.12 = 1240 + 3780 = 5020
+test('a tax-deferred contribution is TAKE-HOME-COST-anchored: $10,000 out of pocket buys MORE than $10,000 in the account', () => {
+  // "contributions" is now the NET (take-home) cost, not the gross deposit -- see
+  // projectAccumulation's docs. before = 70000-16100 = 53900 (22% bracket, up to 105700).
+  // Walking down: 53900->50400 is 3500 of 22%-bracket room, netAvailable = 3500*0.78 = 2730.
+  // Remaining need = 10000-2730 = 7270, in the 12% bracket: netPerGross = 0.88,
+  // grossNeeded = 7270/0.88 = 8261.363636... -> gross = 3500 + 8261.363636 = 11761.363636...
+  // taxableIncome = 53900 - 11761.363636 = 42138.636364 -> tax = 1240 + (42138.636364-12400)*0.12
   const r = projectAccumulation({
     startYear: 2026, endYear: 2027,
     accounts: [{ id: 'ira', balance: 100000, taxStatus: 'taxDeferred' }],
@@ -58,13 +62,15 @@ test('a tax-deferred contribution reduces taxable income (the real 401k/IRA dedu
     bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
   });
   const y = row(r, 2027);
-  approx(y.totals.taxableIncome, 43900);
-  approx(y.totals.tax, 5020);
+  approx(y.accounts.ira.contribution, 11761.363636, 1e-4); // the GROSS amount landing in the account
+  approx(y.accounts.ira.netCost, 10000);                   // exactly what was resolved -- the take-home cost
+  approx(y.totals.taxableIncome, 42138.636364, 1e-4);
+  approx(y.totals.tax, 4808.636364, 1e-4);
   approx(y.totals.marginalRate, 0.12);
-  approx(y.accounts.ira.endBalance, 100000 + 10000); // 0% return, contribution lands at year-end
+  approx(y.accounts.ira.endBalance, 100000 + 11761.363636, 1e-4); // 0% return, contribution lands at year-end
 });
 
-test('a Roth contribution of the SAME amount does NOT reduce taxable income -- direct comparison', () => {
+test('a Roth contribution of the SAME resolved amount costs the SAME take-home but buys FEWER dollars -- direct comparison', () => {
   const scenario = (taxStatus) => projectAccumulation({
     startYear: 2026, endYear: 2027,
     accounts: [{ id: 'a', balance: 0, taxStatus }],
@@ -74,11 +80,66 @@ test('a Roth contribution of the SAME amount does NOT reduce taxable income -- d
   });
   const traditional = row(scenario('taxDeferred'), 2027);
   const roth = row(scenario('roth'), 2027);
-  approx(traditional.totals.taxableIncome, 43900); // 70000 - 10000 - 16100
-  approx(roth.totals.taxableIncome, 53900);          // 70000 - 0 - 16100 (no deduction)
-  approx(traditional.totals.tax, 5020);
-  approx(roth.totals.tax, 6570);
+  // Roth: dollar-for-dollar, no gross-up -- $10,000 net cost buys exactly $10,000 in the account.
+  approx(roth.accounts.a.contribution, 10000);
+  assert.equal(roth.accounts.a.netCost, undefined); // no deduction to gross up, nothing to report
+  approx(roth.totals.taxableIncome, 53900); // 70000 - 0 - 16100 (no deduction)
+  // Traditional: the SAME $10,000 take-home cost buys MORE ($11,761.36) since it shields itself
+  // from tax -- the whole point of this comparison (was previously compared dollar-for-dollar,
+  // which understated Traditional's real advantage for the same paycheck hit).
+  approx(traditional.accounts.a.contribution, 11761.363636, 1e-4);
+  approx(traditional.accounts.a.netCost, 10000);
+  approx(traditional.totals.taxableIncome, 42138.636364, 1e-4);
   assert.ok(traditional.totals.tax < roth.totals.tax, 'the traditional contribution must owe strictly less tax THIS year');
+  assert.ok(traditional.accounts.a.contribution > roth.accounts.a.contribution, 'the same take-home cost must buy MORE in a traditional account');
+});
+
+test('percentOfIncome mode: a Roth % buys exactly that % of income; the SAME % into Traditional buys more', () => {
+  // Ramsey's "15% of gross income" heuristic: for Roth this literally deposits 15% of income.
+  // For Traditional, the SAME 15%-of-income take-home cost grosses up to more, same mechanism
+  // as the dollar-mode test above -- just anchored to a % of income instead of a flat $ figure.
+  const scenario = (taxStatus) => projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [{ id: 'a', balance: 0, taxStatus }],
+    returnRate: { default: 0 }, contributions: { default: 0.15 }, contributionMode: 'percentOfIncome', wageGrowth: { default: 0 },
+    income: { default: 80000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+  });
+  const roth = row(scenario('roth'), 2027);
+  const traditional = row(scenario('taxDeferred'), 2027);
+  approx(roth.accounts.a.contribution, 12000); // 15% of 80000
+  approx(traditional.accounts.a.netCost, 12000); // same take-home cost as the Roth case
+  assert.ok(traditional.accounts.a.contribution > 12000, 'traditional must buy more than the Roth 15% for the same take-home hit');
+});
+
+test('percentOfIncome mode without tax mode resolves to 0 rather than misreading the fraction as dollars', () => {
+  const r = projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [{ id: 'a', balance: 0, taxStatus: 'roth' }],
+    returnRate: { default: 0 }, contributions: { default: 0.15 }, contributionMode: 'percentOfIncome', wageGrowth: { default: 0 },
+  });
+  approx(row(r, 2027).accounts.a.contribution, 0);
+});
+
+test('multiple tax-advantaged accounts pool into ONE combined deduction, grossed up sequentially', () => {
+  // ira (net $5,000) processed first, hsa maxed out second -- see projectAccumulation's docs for
+  // why order matters (each account walks the brackets from where the previous one left off).
+  const r = projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [
+      { id: 'ira', balance: 0, taxStatus: 'taxDeferred' },
+      { id: 'hsa1', balance: 0, taxStatus: 'hsa', hsaMaxOut: true },
+    ],
+    returnRate: { default: 0 }, contributions: { byAccount: { ira: 5000 }, default: 0 }, wageGrowth: { default: 0 },
+    income: { default: 80000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+    hsaCoverage: 'selfOnly',
+  });
+  const y = row(r, 2027);
+  approx(y.accounts.ira.contribution, 6410.25641, 1e-4);   // 5000 net / (1-0.22), fully within the 22% bracket
+  approx(y.accounts.hsa1.contribution, 4400);              // fixed at the 2026 self-only limit
+  // taxableIncome after BOTH deductions = 63900 - 6410.25641 - 4400 = 53089.74359
+  approx(y.totals.taxableIncome, 53089.74359, 1e-4);
 });
 
 test('Roth conversion during accumulation: fills remaining bracket room, capped by the account balance', () => {

@@ -19,6 +19,8 @@ function paramsFor(state, taxTables) {
   const accounts = snapshot.accounts.map((a) => ({
     id: a.id, balance: Number(a.balance) || 0, taxStatus: a.taxStatus,
     costBasis: a.costBasis != null ? Number(a.costBasis) : undefined,
+    hsaMaxOut: a.taxStatus === 'hsa' ? !!a.hsaMaxOut : undefined,
+    hsaViaPayroll: a.taxStatus === 'hsa' ? a.hsaViaPayroll !== false : undefined,
   }));
   if (!accounts.length) return null;
   const startYear = parseInt(String(snapshot.asOf).slice(0, 4), 10) || new Date().getFullYear();
@@ -28,6 +30,7 @@ function paramsFor(state, taxTables) {
     baseYear: startYear, retirementYear, horizonYear, accounts,
     returnRate: assumptions.returnRate,
     contributions: assumptions.contributions,
+    contributionMode: plan.contributionMode,
     wageGrowth: assumptions.wageGrowth,
     inflation: assumptions.inflation,
     spending: assumptions.spending,
@@ -48,6 +51,9 @@ function paramsFor(state, taxTables) {
       taxTables, anchorYear: TAX_ANCHOR_YEAR,
       bracketIndexingRate: assumptions.inflation, standardDeductionIndexingRate: assumptions.inflation,
       stateTaxRate: assumptions.stateTaxRate,
+      // HSA contribution limit (Phase 6.6): coverage tier only matters once there's a real
+      // bracket table to index the limit against, hence gated the same as the rest of tax mode.
+      hsaCoverage: filing.hsaCoverage,
       // Social Security (Phase 5) is opt-in within tax mode: needs earnings + claiming age.
       earnings: assumptions.earnings, careerStartYear: social.careerStartYear, claimingAge: social.claimingAge,
       colaRate: assumptions.colaRate,

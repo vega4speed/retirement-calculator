@@ -21,7 +21,12 @@
 // See the design doc §4.1a for the full writeup.
 
 import { resolve } from './resolver.js';
-import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity, requiredBeginningAge, rmdAmount, cumulativeFactor, bracketTopForRate, marginalRateForIncome } from './tax.js';
+import { resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity, requiredBeginningAge, rmdAmount, cumulativeFactor, bracketTopForRate, marginalRateForIncome, grossUpDeduction, hsaContributionLimit } from './tax.js';
+
+// Combined employee-side Social Security (6.2%) + Medicare (1.45%) payroll tax rate. A flat
+// approximation (no wage-base cap, no Additional Medicare Tax threshold) -- see project.js's
+// contribution docs for why this only matters for HSA-via-payroll, never for 401(k)/IRA.
+const DEFAULT_FICA_RATE = 0.0765;
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from './socialsecurity.js';
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -58,10 +63,51 @@ function rowTotals(accounts, extraKeys) {
  * working year also computes a real federal tax bill on `income` (the SAME wage-indexed-
  * equivalent `earnings` setting Social Security draws on — one input, escalated to NOMINAL
  * dollars for the year by cumulative wage growth, same convention `contributions` already uses).
- * Contributions to `taxStatus:'taxDeferred'` accounts reduce THIS year's taxable income (the real
- * 401k/IRA pre-tax deduction mechanic) — Roth/taxable/HSA/cash contributions don't. This is what
- * actually makes "contribute Traditional vs Roth" a real, not just notional, choice: a Traditional
- * contribution saves `contribution * thisYear'sMarginalRate` in tax right now.
+ *
+ * Contribution semantics (Phase 6.6 — take-home-pay-anchored, not gross-$-anchored): comparing a
+ * $1,000 Roth contribution to a $1,000 Traditional contribution dollar-for-dollar isn't a fair
+ * "which costs my lifestyle more" comparison — Roth is post-tax (costs $1,000 of take-home pay,
+ * full stop) while Traditional is pre-tax (that same $1,000 gross only costs take-home pay of
+ * $1,000*(1-yourMarginalRate), since it shields itself from tax). So for accounts with
+ * `taxStatus` in {'taxDeferred', 'hsa'} (both get a real deduction here — see below), the
+ * resolved `contributions` value is interpreted as the NET take-home cost you're willing to give
+ * up, and the engine solves BACKWARD for the larger GROSS amount that actually lands in the
+ * account, via tax.grossUpDeduction's exact bracket walk (not a flat 1/(1-marginalRate)
+ * approximation, which would overstate the gross amount whenever the deduction spans more than
+ * one bracket). For every other tax status (roth/taxable/cash) the resolved value is still the
+ * literal gross $ that lands in the account — there's no deduction to gross up.
+ *
+ * `contributionMode` picks how the resolved contribution number itself is read: 'dollar' (default)
+ * is a base-year $ amount escalated by cumulative wage growth, same as before; 'percentOfIncome'
+ * reads it as a fraction of THIS year's `income` directly (already wage-growth-escalated via
+ * `income` itself, so no separate cumWage multiply) — e.g. Dave Ramsey's "15% of gross income"
+ * heuristic, applied as 15% of take-home cost for a Roth and grossed up further for Traditional.
+ * `percentOfIncome` requires tax mode (there's no income figure without it); contributions
+ * resolve to 0 if selected without tax mode rather than crashing.
+ *
+ * Multiple accounts with taxStatus in {'taxDeferred','hsa'} pool into ONE combined deduction
+ * against taxable income (real tax law: the deduction is against your total taxable income, not
+ * per-account) — so they're grossed up SEQUENTIALLY in `accounts` array order, each one walking
+ * the brackets from wherever the previous one left off, rather than independently (which would
+ * double-count the same cheap bracket room across accounts). This makes the split between
+ * multiple such accounts's OWN gross amounts order-dependent (whichever is processed first "gets"
+ * the cheaper bracket room) — a real but minor wrinkle, same flavor as sequencing order mattering
+ * elsewhere in this engine (e.g. RMD floors going first in withdrawal sequencing).
+ *
+ * HSA contributions (`taxStatus:'hsa'`) join the SAME deduction pool as Traditional 401(k)/IRA —
+ * real tax law: HSA contributions reduce federal taxable income just like a 401(k)'s, whether
+ * made via payroll or claimed as an above-the-line deduction. Two HSA-specific per-account flags
+ * (on the `accounts` array entries) layer on top:
+ *   - `hsaMaxOut` (boolean): bypasses net-cost-anchoring entirely for that account — the GROSS
+ *     contribution is fixed at that year's indexed HSA limit (tax.hsaContributionLimit, using
+ *     `p.hsaCoverage` and age for the 55+ catch-up) rather than solved from a net-cost target.
+ *     The take-home cost is then derived (informational) rather than being the input.
+ *   - `hsaViaPayroll` (boolean, default true when omitted): whether the contribution passes
+ *     through a Section 125 cafeteria plan. When true, it ALSO skips FICA (Social Security +
+ *     Medicare payroll tax, `p.ficaRate`, default 7.65%) — one of HSA's real tax advantages over
+ *     a Traditional 401(k), which reduces income-tax wages (W-2 Box 1) but NEVER payroll-tax
+ *     wages (Box 3/5), regardless of contribution method. Set false if the HSA is instead funded
+ *     after-tax and deducted on the return, which gets the income-tax benefit but not the FICA one.
  *
  * Roth conversions during accumulation (opt-in `rothConversionsEnabled` + `bracketFillRate`,
  * same knobs as decumulation's — design doc §5, extended to the working years by request):
@@ -77,10 +123,12 @@ function rowTotals(accounts, extraKeys) {
  * @param {object} p
  * @param {number} p.startYear       baseline (snapshot) year; row t=0 holds current balances
  * @param {number} p.endYear         last accumulation year (retirement); inclusive, >= startYear
- * @param {{id:string, balance:number, taxStatus?:string}[]} p.accounts taxStatus is only used by
- *   tax-aware mode (the deduction + conversion mechanics above); harmless to omit otherwise
+ * @param {{id:string, balance:number, taxStatus?:string, hsaMaxOut?:boolean, hsaViaPayroll?:boolean}[]} p.accounts
+ *   taxStatus/hsaMaxOut/hsaViaPayroll are only used by tax-aware mode (the deduction + conversion
+ *   mechanics above); harmless to omit otherwise
  * @param {object} p.returnRate      setting (per account/year)
- * @param {object} [p.contributions] setting (base-year annual $ per account); default 0
+ * @param {object} [p.contributions] setting; meaning depends on p.contributionMode. default 0
+ * @param {'dollar'|'percentOfIncome'} [p.contributionMode] default 'dollar'
  * @param {object} [p.wageGrowth]    setting (per year); default 0
  * @param {object} [p.inflation]     setting (per year); default 0
  * @param {object} [p.income] setting (per year), wage-indexed-equivalent annual $ — enables
@@ -92,7 +140,9 @@ function rowTotals(accounts, extraKeys) {
  * @param {object} [p.standardDeductionIndexingRate] setting; default 0
  * @param {number} [p.stateTaxRate] flat rate; default 0
  * @param {number} [p.birthYear] enables the standard deduction's age-65 addition (rare during
- *   working years, but kept consistent with decumulation's handling)
+ *   working years, but kept consistent with decumulation's handling) and the HSA 55+ catch-up
+ * @param {'selfOnly'|'family'} [p.hsaCoverage] default 'selfOnly'; drives hsaMaxOut's limit
+ * @param {number} [p.ficaRate] default 0.0765; see hsaViaPayroll above
  * @param {boolean} [p.rothConversionsEnabled] see the conversions section above
  * @param {number} [p.bracketFillRate] the ordinary rate to fill up to; required with
  *   rothConversionsEnabled (see tax.bracketTopForRate)
@@ -111,6 +161,7 @@ export function projectAccumulation(p) {
   }
   const returnRate = p.returnRate ?? { default: 0 };
   const contributions = p.contributions ?? { default: 0 };
+  const contributionMode = p.contributionMode ?? 'dollar';
   const wageGrowth = p.wageGrowth ?? { default: 0 };
   const inflation = p.inflation ?? { default: 0 };
   const taxMode = !!(p.income && p.filingStatus && p.taxTables);
@@ -118,6 +169,8 @@ export function projectAccumulation(p) {
     throw new Error('projectAccumulation: anchorYear is required when taxTables is provided');
   }
   const stateTaxRate = num(p.stateTaxRate);
+  const ficaRate = p.ficaRate ?? DEFAULT_FICA_RATE;
+  const hsaCoverage = p.hsaCoverage === 'family' ? 'family' : 'selfOnly';
 
   const bal = {};
   for (const a of accounts) bal[a.id] = num(a.balance);
@@ -142,28 +195,67 @@ export function projectAccumulation(p) {
     cumInflation *= 1 + num(resolve(inflation, { year }));
     cumWage *= 1 + num(resolve(wageGrowth, { year }));
 
-    // Pass 1: this year's contribution per account (doesn't touch balances yet — needed up front
-    // to know how much taxable income tax-deferred contributions shelter).
-    const contributionByAccount = {};
-    let taxDeferredContribution = 0;
-    for (const a of accounts) {
-      const c = num(resolve(contributions, { accountId: a.id, year })) * cumWage;
-      contributionByAccount[a.id] = c;
-      if (a.taxStatus === 'taxDeferred') taxDeferredContribution += c;
-    }
-
+    // Income & the year's resolved tax table are needed BEFORE contributions now (net-cost
+    // gross-up needs a taxable-income position to walk down from; percentOfIncome mode needs
+    // `income` directly) — computed once here, reused by both the contribution pass and the tax
+    // pass below.
     let income = 0, taxableIncome = 0, tax = 0, marginalRate = 0, effectiveTaxRate = 0, conversionAmount = 0, grossIncome = 0;
     const conversionFlow = Object.fromEntries(accounts.map((a) => [a.id, 0]));
+    const netContributionCost = {}; // informational per-account take-home cost (UI display only)
+    let yearTable = null, stdDeduction = 0, age = null;
     if (taxMode) {
       income = num(resolve(p.income, { year })) * cumWage;
-      const age = Number.isInteger(p.birthYear) ? year - p.birthYear : null;
-      const yearTable = resolveYearTable({
+      age = Number.isInteger(p.birthYear) ? year - p.birthYear : null;
+      yearTable = resolveYearTable({
         tables: p.taxTables, year, anchorYear: p.anchorYear,
         bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,
       });
-      const stdDeduction = standardDeduction({ filingStatus: p.filingStatus, age65Count: age != null && age >= 65 ? 1 : 0, yearTable });
-      taxableIncome = Math.max(0, income - taxDeferredContribution - stdDeduction);
+      stdDeduction = standardDeduction({ filingStatus: p.filingStatus, age65Count: age != null && age >= 65 ? 1 : 0, yearTable });
+    }
 
+    // Pass 1: this year's contribution per account (doesn't touch balances yet). Accounts with
+    // taxStatus 'taxDeferred' or 'hsa' pool into ONE combined deduction, grossed up SEQUENTIALLY
+    // in accounts-array order (see the contribution-semantics docs above) rather than
+    // independently. Everything else (roth/taxable/cash) is dollar-for-dollar, no gross-up.
+    const contributionByAccount = {};
+    if (taxMode) {
+      const brackets = yearTable.ordinaryBrackets[p.filingStatus];
+      let runningBefore = Math.max(0, income - stdDeduction);
+      for (const a of accounts) {
+        if (a.taxStatus !== 'taxDeferred' && a.taxStatus !== 'hsa') continue;
+        const viaPayroll = a.taxStatus === 'hsa' && a.hsaViaPayroll !== false;
+        const accountFicaRate = viaPayroll ? ficaRate : 0;
+        if (a.taxStatus === 'hsa' && a.hsaMaxOut) {
+          const gross = hsaContributionLimit(hsaCoverage, age, yearTable, p.taxTables.fixed);
+          const taxSaved = ordinaryTax(runningBefore, p.filingStatus, yearTable)
+            - ordinaryTax(Math.max(0, runningBefore - gross), p.filingStatus, yearTable);
+          contributionByAccount[a.id] = gross;
+          netContributionCost[a.id] = gross * (1 - accountFicaRate) - taxSaved;
+          runningBefore = Math.max(0, runningBefore - gross);
+        } else {
+          const raw = num(resolve(contributions, { accountId: a.id, year }));
+          const netCost = contributionMode === 'percentOfIncome' ? raw * income : raw * cumWage;
+          const gross = grossUpDeduction(netCost, runningBefore, brackets, accountFicaRate);
+          contributionByAccount[a.id] = gross;
+          netContributionCost[a.id] = netCost;
+          runningBefore = Math.max(0, runningBefore - gross);
+        }
+      }
+      taxableIncome = runningBefore;
+      for (const a of accounts) {
+        if (a.taxStatus === 'taxDeferred' || a.taxStatus === 'hsa') continue;
+        const raw = num(resolve(contributions, { accountId: a.id, year }));
+        contributionByAccount[a.id] = contributionMode === 'percentOfIncome' ? raw * income : raw * cumWage;
+      }
+    } else {
+      for (const a of accounts) {
+        if (contributionMode === 'percentOfIncome') { contributionByAccount[a.id] = 0; continue; } // no income figure without tax mode
+        const raw = num(resolve(contributions, { accountId: a.id, year }));
+        contributionByAccount[a.id] = raw * cumWage;
+      }
+    }
+
+    if (taxMode) {
       if (p.rothConversionsEnabled && p.bracketFillRate != null) {
         const ceiling = bracketTopForRate(p.bracketFillRate, yearTable.ordinaryBrackets[p.filingStatus]);
         const roomLeft = Math.max(0, ceiling - taxableIncome);
@@ -205,6 +297,7 @@ export function projectAccumulation(p) {
     // before; the conversion (a balance transfer, not new money) DOES grow this year, since it's
     // effectively money that was already there, just relocated.
     const acc = {};
+    let netContributionCostTotal = 0;
     for (const a of accounts) {
       const startBalance = bal[a.id];
       const contribution = contributionByAccount[a.id];
@@ -213,14 +306,23 @@ export function projectAccumulation(p) {
       const growth = remainder * r;
       const endBalance = remainder + growth + contribution;
       bal[a.id] = endBalance;
-      acc[a.id] = { startBalance, contribution, conversion: conversionFlow[a.id], growth, endBalance };
+      // netCost: informational take-home-pay cost for tax-advantaged accounts (see the
+      // contribution-semantics docs above) -- undefined for roth/taxable/cash, where the
+      // contribution figure already IS the take-home cost (no gross-up to report).
+      const netCost = netContributionCost[a.id];
+      acc[a.id] = { startBalance, contribution, netCost, conversion: conversionFlow[a.id], growth, endBalance };
+      if (netCost != null) netContributionCostTotal += netCost;
     }
     // NOT auto-summed via rowTotals: acc[id].conversion is SIGNED (negative on the source
     // account, positive on the target), so a plain sum across accounts always nets to exactly
     // zero (it's a transfer between two of the same household's accounts, not new money). What
     // "how much was converted this year" actually means is the magnitude, tracked separately.
+    // acc[id].netCost is untouched by rowTotals too (only listed keys get summed) -- it's
+    // `undefined` for non-tax-advantaged accounts, and naively coercing that to 0 would blur "no
+    // gross-up to report" with "a real $0 take-home cost"; summed explicitly below instead.
     const totals = rowTotals(acc, ['contribution']);
     totals.conversion = conversionAmount;
+    totals.netContributionCost = netContributionCostTotal;
     totals.income = income;
     totals.taxableIncome = taxableIncome;
     totals.tax = tax;
@@ -796,10 +898,14 @@ export function projectDecumulation(p) {
  * @param {number} p.baseYear
  * @param {number} p.retirementYear   >= baseYear
  * @param {number} p.horizonYear      >= retirementYear
- * @param {{id:string, balance:number, taxStatus:string, costBasis?:number}[]} p.accounts
+ * @param {{id:string, balance:number, taxStatus:string, costBasis?:number, hsaMaxOut?:boolean, hsaViaPayroll?:boolean}[]} p.accounts
  * @param {object} p.returnRate       setting, used in both phases
  * @param {object} [p.inflation]      setting, used in both phases
- * @param {object} [p.contributions]  accumulation only
+ * @param {object} [p.contributions]  accumulation only — see projectAccumulation's docs for the
+ *   take-home-pay-anchored semantics
+ * @param {'dollar'|'percentOfIncome'} [p.contributionMode] accumulation only; default 'dollar'
+ * @param {'selfOnly'|'family'} [p.hsaCoverage] accumulation only; default 'selfOnly'
+ * @param {number} [p.ficaRate] accumulation only; default 0.0765
  * @param {object} [p.wageGrowth]     accumulation only
  * @param {object} [p.spending]       decumulation only
  * @param {object} [p.otherIncome]    decumulation only
@@ -854,16 +960,20 @@ export function project(p) {
 
   const acc = projectAccumulation({
     startYear: baseYear, endYear: retirementYear,
-    accounts: accounts.map((a) => ({ id: a.id, balance: a.balance, taxStatus: a.taxStatus })),
-    returnRate: p.returnRate, contributions: p.contributions, wageGrowth: p.wageGrowth, inflation: p.inflation,
+    accounts: accounts.map((a) => ({
+      id: a.id, balance: a.balance, taxStatus: a.taxStatus,
+      hsaMaxOut: a.hsaMaxOut, hsaViaPayroll: a.hsaViaPayroll,
+    })),
+    returnRate: p.returnRate, contributions: p.contributions, contributionMode: p.contributionMode,
+    wageGrowth: p.wageGrowth, inflation: p.inflation,
     // Pre-retirement tax mode (Phase 6.5): opt-in on the SAME inputs decumulation tax and Social
     // Security already need — no separate toggle, consistent with how tax mode auto-activates
     // below. Reuses `earnings` (the SS wage-indexed-equivalent figure) as the income driving
     // this year's tax bill; see projectAccumulation's docs for the escalation convention and the
-    // taxDeferred-contribution-deduction / Roth-conversion mechanics.
+    // taxDeferred/HSA-contribution-deduction, take-home-cost gross-up, and Roth-conversion mechanics.
     income: p.earnings, filingStatus: p.filingStatus, taxTables: p.taxTables, anchorYear: p.anchorYear,
     bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,
-    stateTaxRate: p.stateTaxRate, birthYear: p.birthYear,
+    stateTaxRate: p.stateTaxRate, birthYear: p.birthYear, hsaCoverage: p.hsaCoverage, ficaRate: p.ficaRate,
     rothConversionsEnabled: p.rothConversionsEnabled, bracketFillRate: p.bracketFillRate,
   });
   const lastAccRow = acc.years[acc.years.length - 1];

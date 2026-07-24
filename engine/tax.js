@@ -126,6 +126,99 @@ export function traditionalVsRothVerdict(currentRate, laterRate, tolerance = 0.0
   return diff > 0 ? 'traditional' : 'roth';
 }
 
+/**
+ * The inverse of a marginal-bracket walk: given a target NET cost (take-home pay you're willing
+ * to give up) and your taxable income position BEFORE this deduction, find the exact GROSS
+ * pre-tax contribution that costs exactly that much take-home pay. Walks the ordinary brackets
+ * DOWNWARD from `before` (a dollar sheltered from a higher bracket costs less take-home than one
+ * sheltered from a lower bracket) — the same bracket-arithmetic idea as bracketTax's own walk,
+ * just inverted: bracketTax measures tax owed on income already earned, this measures how much
+ * MORE gross income a fixed net cost can shelter.
+ *
+ * netCost(gross) = gross*(1 - ficaSavingsRate) - [tax(before) - tax(before - gross)]. Both the
+ * bracket-walk term and the FICA term are monotonic in gross (tax rates and ficaSavingsRate are
+ * always < 100%), so netCost is strictly increasing in gross — a unique solution always exists.
+ * Once `before - gross` would go below $0 there's no more INCOME tax to shelter (the bracket-walk
+ * term caps out), but ficaSavingsRate keeps applying beyond that point since FICA is a flat rate
+ * on wages, not bracket-structured — the remainder costs `netCost / (1 - ficaSavingsRate)` gross
+ * per net dollar, same shape as a Roth contribution once ficaSavingsRate is 0.
+ *
+ * ficaSavingsRate: an OPTIONAL flat rate (e.g. 0.0765 for combined Social Security + Medicare
+ * employee-side) for contributions that ALSO skip payroll tax when made via payroll (HSA through
+ * a Section 125 cafeteria plan) — see project.js's docs for why traditional 401(k)/IRA never get
+ * this. Deliberately a flat rate, not a real FICA calculation (no wage-base cap, no Additional
+ * Medicare Tax threshold) — same simplification already noted for FICA elsewhere in this app.
+ *
+ * @param {number} netCost
+ * @param {number} before   taxable income BEFORE this deduction (clamped to >= 0)
+ * @param {{upTo:number|null, rate:number}[]} brackets
+ * @param {number} [ficaSavingsRate] default 0
+ * @returns {number} the gross (pre-tax) contribution amount
+ */
+export function grossUpDeduction(netCost, before, brackets, ficaSavingsRate = 0) {
+  const target = Math.max(0, num(netCost));
+  if (target <= 1e-9) return 0;
+  const startingBefore = Math.max(0, num(before));
+
+  // Build the bracket segments actually touched by [0, startingBefore], ascending.
+  const segments = [];
+  let prevUpTo = 0;
+  for (const b of brackets) {
+    const upTo = b.upTo == null ? Infinity : b.upTo;
+    const segEnd = Math.min(upTo, startingBefore);
+    if (segEnd > prevUpTo) segments.push({ start: prevUpTo, end: segEnd, rate: b.rate });
+    prevUpTo = upTo;
+    if (startingBefore <= upTo) break;
+  }
+
+  let gross = 0;
+  let netCovered = 0;
+  // Walk from the TOP touched segment down -- the segment `before` currently sits in (the most
+  // expensive bracket to be in, so the cheapest room to shelter FROM) is consumed first.
+  for (let i = segments.length - 1; i >= 0 && netCovered < target - 1e-9; i--) {
+    const seg = segments[i];
+    const room = seg.end - seg.start;
+    const netPerGross = Math.max(0, 1 - seg.rate - ficaSavingsRate);
+    const netAvailable = room * netPerGross;
+    const netNeeded = target - netCovered;
+    if (netAvailable <= netNeeded + 1e-9) {
+      gross += room;
+      netCovered += netAvailable;
+    } else {
+      gross += netPerGross > 1e-9 ? netNeeded / netPerGross : room;
+      netCovered = target;
+    }
+  }
+  // Below $0 taxable income there's no more INCOME tax to shelter, but FICA savings (if any)
+  // still apply -- flat on wages, not tied to brackets/taxable income at all.
+  if (netCovered < target - 1e-9) {
+    const netPerGrossTail = Math.max(1e-9, 1 - ficaSavingsRate);
+    gross += (target - netCovered) / netPerGrossTail;
+  }
+  return gross;
+}
+
+/**
+ * This year's HSA contribution limit for a coverage tier, including the age-55+ catch-up.
+ * `yearTable.hsaLimit` (self-only/family) is indexed the SAME way as the standard deduction (see
+ * resolveYearTable) -- HSA limits have historically tracked close to general inflation (2025->2026
+ * was +2.3% on both tiers), and the real IRS formula's own lumpier $50-rounded chained-CPI
+ * calculation isn't worth replicating for a multi-decade estimate; the catch-up amount is fixed by
+ * statute (never inflation-indexed, unlike the base limits), so it comes from `fixedTables`
+ * un-scaled, same pattern as the Social Security provisional-income thresholds.
+ * @param {'selfOnly'|'family'} coverage
+ * @param {number|null} age
+ * @param {{hsaLimit?: {selfOnly:number, family:number}}} yearTable  from resolveYearTable
+ * @param {{hsaCatchUp?: {amount:number, age:number}}} fixedTables   tax-tables.json's `fixed` block
+ * @returns {number}
+ */
+export function hsaContributionLimit(coverage, age, yearTable, fixedTables) {
+  const base = num(yearTable.hsaLimit?.[coverage]);
+  const catchUp = fixedTables?.hsaCatchUp;
+  const catchUpAmt = catchUp && Number.isFinite(age) && age >= catchUp.age ? num(catchUp.amount) : 0;
+  return base + catchUpAmt;
+}
+
 function scaleBrackets(brackets, factor) {
   return brackets.map((b) => ({ upTo: b.upTo == null ? null : b.upTo * factor, rate: b.rate }));
 }
@@ -184,6 +277,13 @@ export function resolveYearTable(p) {
         unmarried: anchor.standardDeduction.additional65.unmarried * sf,
       },
     },
+    // Reuses the SAME standardDeductionIndexingRate as the standard deduction above -- see
+    // hsaContributionLimit's docs for why this is a reasonable stand-in for the real (lumpier)
+    // IRS HSA indexing formula rather than a dedicated one.
+    hsaLimit: anchor.hsaLimits ? {
+      selfOnly: anchor.hsaLimits.selfOnly * sf,
+      family: anchor.hsaLimits.family * sf,
+    } : undefined,
   };
 }
 

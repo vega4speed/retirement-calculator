@@ -125,6 +125,21 @@ tax figures are joined by retirement-only ones (used for the trad-vs-Roth verdic
 isn't diluted by pre-retirement tax) and a combined "working + retired" total is shown whenever
 it actually differs from the retirement-only figure.
 
+**Fair Traditional-vs-Roth comparisons, and HSA.** A $1,000 Roth contribution and a $1,000
+Traditional contribution aren't an apples-to-apples comparison — Roth is post-tax, so it costs
+$1,000 out of your paycheck, full stop; Traditional shields itself from tax, so that same $1,000
+gross costs you LESS take-home pay. So contributions to Traditional and HSA accounts are now
+anchored to the take-home cost you're willing to give up, not the raw dollar amount — type in
+what you're willing to give up from your paycheck, and the calculator solves for the larger
+amount that actually lands in a Traditional or HSA account (an exact tax-bracket calculation, not
+a rough estimate). You can set that figure as a flat dollar amount or as a % of income (Dave
+Ramsey's "give 15%" heuristic, for instance) — a one-line note under the setting shows what
+today's figure actually buys in each account type. HSA accounts now also get their own real tax
+treatment: a "max out" option fills the account to that year's actual IRS limit (including the
+55+ catch-up), and a "via payroll" option reflects that payroll HSA contributions skip Social
+Security/Medicare tax too — a real advantage a Traditional 401(k)/IRA never gets, regardless of
+how you contribute.
+
 In progress: couple/spousal Social Security (the remaining v1-boundary item).
 
 Known simplifications, documented in the code: state tax is a flat rate (no state brackets);
@@ -132,15 +147,18 @@ Known simplifications, documented in the code: state tax is a flat rate (no stat
 Social Security which now is; "earnings" for the SS estimate is wage-indexed-equivalent rather
 than real historical dollars run through the actual SSA wage index (skips a multi-decade table
 the tool doesn't have verified data for — see `engine/socialsecurity.js`'s header for the full
-reasoning); the FICA wage-base cap isn't modeled (high earners' PIA is modestly overstated);
-Social Security only starts once decumulation begins, even if your claiming age is earlier;
-taxable-account cost basis is a constant fraction from your snapshot, not grown through
-contributions; HSA non-medical penalties and Roth early-withdrawal rules aren't modeled; light
-theme only (no dark mode); contributions are still a fixed dollar amount, not a %-of-income mode
-(still blocked on real income modeling, per §4.1a — now that working-years income modeling
-exists, this is the next natural piece); working-years Roth conversions are gated behind picking
+reasoning); the FICA wage-base cap and Additional Medicare Tax threshold aren't modeled (a flat
+7.65% rate is used only for the HSA take-home-cost calculation, not as a real payroll-tax
+liability computed anywhere); Social Security only starts once decumulation begins, even if your
+claiming age is earlier; taxable-account cost basis is a constant fraction from your snapshot,
+not grown through contributions; HSA non-medical penalties and Roth early-withdrawal rules aren't
+modeled; light theme only (no dark mode); working-years Roth conversions are gated behind picking
 "fill to the top of a bracket" as your withdrawal order rather than having their own independent
-toggle, a scope-control simplification rather than a hard requirement.
+toggle, a scope-control simplification rather than a hard requirement; HSA contribution limits
+are indexed by the same rate as the standard deduction (a reasonable proxy, tracking close to
+recent real growth) rather than the IRS's own lumpier formula; self-employed HSA/payroll-tax
+differences aren't modeled — a known gap for later, since self-employment tax works entirely
+differently from W-2 payroll withholding.
 
 > **Note:** `data/tax-tables.json` 2025/2026 figures are verified against IRS Rev. Proc. 2025-32
 > and cross-checked secondary sources (see the file's `_meta`). RMD divisors past age 100 are

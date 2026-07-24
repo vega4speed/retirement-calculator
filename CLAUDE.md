@@ -29,7 +29,12 @@ engine/               pure calculation modules (unit-tested)
                          projectAccumulation()'s per-year marginalRate; traditionalVsRothVerdict()
                          — pure current-rate-vs-later-rate -> 'traditional'|'roth'|'wash', with a
                          configurable tolerance for "close enough to call it a wash" — extracted
-                         from app.js's inline verdict logic)
+                         from app.js's inline verdict logic; grossUpDeduction() — the reverse of a
+                         marginal-bracket walk: net take-home cost -> gross pre-tax amount, walking
+                         brackets DOWNWARD from a taxable-income position (see project.js's
+                         contribution docs); hsaContributionLimit() — this year's indexed HSA limit
+                         + 55+ catch-up, resolveYearTable()'s output now also carries `hsaLimit`
+                         {selfOnly,family}, indexed the same way as the standard deduction)
   project.js            accumulation + decumulation, tax-aware — DONE (spending, withdrawal
                          strategy, tax-status sequencing, RMD forcing, capital-gains stacking,
                          gross-up, portfolio survival, Social Security income + taxation, and
@@ -92,6 +97,34 @@ engine/               pure calculation modules (unit-tested)
                          In practice usually $0 for a full-time salary (job income alone already
                          exceeds a modest bracket) — most likely to show up in a lower-income
                          working year (part-time, a gap year, early career).
+                         Phase 6.6, take-home-pay-anchored contributions (DONE): comparing a $1,000
+                         Roth contribution to a $1,000 Traditional one dollar-for-dollar isn't fair
+                         — Roth is post-tax (costs $1,000 take-home, full stop) while Traditional
+                         shields itself from tax (costs LESS take-home for the same gross $). So
+                         for taxDeferred/hsa accounts, the resolved `contributions` value is now
+                         the NET take-home cost, and tax.grossUpDeduction() solves BACKWARD for the
+                         larger gross amount that lands in the account — an EXACT bracket walk
+                         (not a flat 1/(1-marginalRate) approximation, which overstates the gross
+                         amount once a deduction spans more than one bracket). `contributionMode`
+                         ('dollar' default, or 'percentOfIncome' — reads the resolved value as a
+                         fraction of that year's income directly, e.g. Dave Ramsey's "15% of gross
+                         income" heuristic). Multiple taxDeferred/hsa accounts pool into ONE
+                         combined deduction (real tax law), grossed up SEQUENTIALLY in accounts-
+                         array order — order-dependent (whichever's processed first "gets" the
+                         cheaper bracket room), a documented, minor wrinkle, same flavor as
+                         sequencing order mattering elsewhere in this engine. HSA now joins the
+                         SAME deduction pool as taxDeferred (real tax law: HSA contributions reduce
+                         federal taxable income too). Two HSA-only per-account flags: `hsaMaxOut`
+                         (bypasses net-cost-anchoring — gross is fixed at that year's indexed limit
+                         via tax.hsaContributionLimit, using `hsaCoverage` + the 55+ catch-up) and
+                         `hsaViaPayroll` (default true — whether it also skips FICA, `ficaRate`
+                         default 7.65%, a flat approximation matching the existing "FICA wage-base
+                         cap isn't modeled" simplification; false if funded after-tax and deducted
+                         on the return, which gets the income-tax benefit but not the FICA one —
+                         traditional 401(k)/IRA NEVER get this regardless of method, a real,
+                         unconditional tax-law fact, not a toggle). Each account row also carries
+                         `netCost` (the take-home figure, informational — undefined for roth/
+                         taxable/cash, which have no gross-up to report).
   socialsecurity.js     earnings → AIME → PIA → claiming → COLA/haircut — DONE (implemented +
                          tested). fullRetirementAge() (1983-Amendments table), estimatePIA()
                          (bend-point formula on a "wage-indexed-equivalent" earnings setting —
@@ -116,7 +149,22 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          even after project.js grew a real year-by-year accumulation tax ledger,
                          since this snapshot is self-contained and works without a
                          retirementYear > baseYear (see the Status section for how the two
-                         relate).
+                         relate). Now also returns `taxableIncome` (was computed internally but
+                         silently dropped from the return value — a real latent bug, only surfaced
+                         once contributionCostBox became the first consumer to need it; fixed).
+                         contributionCostBox: a one-line "what does that actually buy" readout for
+                         the Annual contribution row — reuses currentTaxSnapshot()'s real (not
+                         approximated) taxableIncome position with tax.grossUpDeduction() to show
+                         today's exact Traditional/HSA-via-payroll gross equivalent for the DEFAULT
+                         contribution value (doesn't reflect per-account overrides, multiple pooled
+                         accounts, or an HSA max-out limit — the projection table below computes
+                         the exact, complete version of this per year). `plan.contributionMode`
+                         ('dollar'|'percentOfIncome') and `filing.hsaCoverage` ('selfOnly'|'family',
+                         shown only when an HSA account exists) are new state fields, both reset on
+                         Clear. Switching contributionMode resets `assumptions.contributions` to a
+                         fresh default rather than reinterpreting the same stored number under the
+                         other mode's totally different meaning (a $10,000 dollar-mode value would
+                         otherwise read as 1,000,000% if left in place).
   project-adapter.js    projectFor(state, taxTables) — the ONE place that maps the app's
                          {snapshot, assumptions, plan, filing, social} state shape to a
                          project() call. Shared by app.js (the live editor) and scenarios.js
@@ -149,7 +197,9 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          shape predates how the live app's state actually evolved through
                          Phases 2-6; scenarios.js persists the app's real (flatter) state shape
                          directly instead of forcing a fit to that schema.
-  accounts-editor.js    enter/edit accounts, tax statuses, balances, cost basis
+  accounts-editor.js    enter/edit accounts, tax statuses, balances, cost basis, and (HSA accounts
+                         only, "n/a" otherwise, same pattern as the cost-basis column) two
+                         checkboxes: max out (Phase 6.6) and via payroll (FICA savings)
   setting-control.js    the reusable Simple/Expand knob (supports `perAccount:false` for
                          household-level settings like spending), with a live resolved preview
   projection-view.js    stat tiles (portfolio survival; "Lifetime tax in retirement" +
@@ -172,14 +222,15 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          Phase 7 so projection-view.js's chart and scenarios.js's comparison
                          chart don't each keep their own copy.
   dom.js, formats.js    tiny DOM builder (incl. SVG) + value<->input formatting helpers
-data/                 tax-tables.json (verified 2025/2026 figures) + EXAMPLE templates
+data/                 tax-tables.json (verified 2025/2026 figures, now incl. HSA self-only/family
+                       limits per year + the fixed $1,000/age-55 catch-up) + EXAMPLE templates
 schemas/              JSON Schemas for profile / snapshot / scenario — scaffolding from Phase 0,
                        predates the app's actual (simpler) state shape; not wired up (see
                        scenarios.js above)
 test/                 node:test suites (smoke, resolver, accumulation, accumulation-tax,
-                       decumulation, tax, decumulation-tax, socialsecurity,
+                       hsa-contributions, decumulation, tax, decumulation-tax, socialsecurity,
                        social-security-decumulation, bracket-fill, max-sustainable,
-                       roth-conversions) — 134 passing.
+                       roth-conversions) — 146 passing.
 ```
 
 ## Running
@@ -242,7 +293,19 @@ tax, `project()`'s lifetime tax aggregates would dilute the "what rate will this
 retirement" comparison the trad-vs-Roth verdict needs — so it now also returns
 decumulation-only aggregates, and both the verdict readout and the "Lifetime tax in retirement"
 stat tile were repointed to those; a new "Total tax, working + retired" tile shows the whole-plan
-figure only when it actually differs. In progress: couple/spousal Social Security (the remaining
+figure only when it actually differs.
+**Phase 6.6, take-home-pay-anchored contributions + HSA (2026-07-24):** comparing a $1,000 Roth
+contribution to a $1,000 Traditional one dollar-for-dollar isn't a fair "which costs my lifestyle
+more" comparison, since Roth is post-tax and Traditional shields itself from tax. Contributions to
+tax-deferred/HSA accounts are now interpreted as the NET take-home cost, grossed up to the larger
+actual account deposit via an exact bracket walk (`tax.grossUpDeduction`, not a flat-rate
+approximation). A new `contributionMode` ('dollar' or 'percentOfIncome', e.g. "15% of gross
+income") picks how the resolved number itself reads. HSA now joins the SAME deduction pool as
+Traditional 401(k)/IRA (real tax law), plus two HSA-only per-account options: max out (fixed at
+that year's indexed IRS limit + 55+ catch-up, verified/sourced in `tax-tables.json`) and via
+payroll (also skips FICA — a real tax advantage 401(k)/IRA never get, regardless of contribution
+method). A one-line readout under the contribution setting shows today's real gross-equivalent for
+whatever the default value resolves to. In progress: couple/spousal Social Security (the remaining
 v1-boundary item from §13).
 
 **Fixed 2026-07-22 (two small UI bugs):**
@@ -252,6 +315,14 @@ v1-boundary item from §13).
    captures `window.scrollY` before clearing and restores it after re-appending.
 2. The chart's hover tooltip showed year and phase but not age, even though the table already had
    an age column. Added `· age N` to the tooltip's first line when `birthYear` is known.
+
+**Fixed 2026-07-24 (currentTaxSnapshot() silently dropped taxableIncome):** found while building
+Phase 6.6's contribution-cost readout — the function computed `taxableIncome` internally but never
+included it in its return object, so `snap.taxableIncome` was `undefined` everywhere; the ONLY
+place that broke visibly was the new readout (num()'s `undefined -> 0` fallback made every
+Traditional/HSA gross-equivalent read as identical to the net cost, since grossUpDeduction treated
+"before" as $0 taxable income). No prior consumer had needed the field, so this was a real,
+pre-existing latent gap, not a regression. Fixed by adding `taxableIncome` to the return value.
 
 **Fixed 2026-07-21 (two bugs, both with regression tests):**
 1. The portfolio-survival badge could falsely claim depletion on the very first decumulation
@@ -266,15 +337,20 @@ v1-boundary item from §13).
 Known simplifications (see README's Status section for the full list): flat state tax rate (no
 state brackets); `otherIncome` still isn't taxed (Social Security now is); SS "earnings" is
 wage-indexed-equivalent, not real historical dollars run through the actual SSA wage index; the
-FICA wage-base cap isn't modeled; SS only starts once decumulation begins even if claimed
-earlier; taxable-account cost basis is a constant fraction from the snapshot, not grown through
-contributions; HSA/Roth early-withdrawal penalties not modeled; light theme only; the
-pre-retirement snapshot readout (today's marginal/effective rate) is still a single point in
-time, kept alongside the newer year-by-year accumulation ledger rather than replaced by it
-(self-contained, doesn't need retirementYear > baseYear); accumulation contributions are still a
-fixed $ amount, not a %-of-income mode (still blocked on that, per §4.1a); accumulation-phase
-Roth conversions are gated behind selecting `bracketFill` decumulation sequencing rather than
-having their own independent toggle — a scope-control simplification, not a hard requirement.
+FICA wage-base cap and Additional Medicare Tax threshold aren't modeled (`ficaRate` is a flat
+7.65% used only inside the take-home-cost gross-up, not a real FICA liability computed anywhere);
+SS only starts once decumulation begins even if claimed earlier; taxable-account cost basis is a
+constant fraction from the snapshot, not grown through contributions; HSA/Roth early-withdrawal
+penalties not modeled; light theme only; the pre-retirement snapshot readout (today's
+marginal/effective rate) is still a single point in time, kept alongside the newer year-by-year
+accumulation ledger rather than replaced by it (self-contained, doesn't need retirementYear >
+baseYear); accumulation-phase Roth conversions are gated behind selecting `bracketFill`
+decumulation sequencing rather than having their own independent toggle — a scope-control
+simplification, not a hard requirement; HSA contribution limits are indexed by the SAME rate as
+the standard deduction (a reasonable proxy — 2025→2026 growth was +2.3% on both tiers, tracking
+close to inflation) rather than the real IRS formula's own lumpier $50-rounded chained-CPI
+calculation; self-employed HSA/FICA/SE-tax differences aren't modeled — a known gap, logged for
+later, not blocking (self-employment tax works entirely differently from W-2 payroll FICA).
 
 > `data/tax-tables.json` 2025/2026 figures are VERIFIED (IRS Rev. Proc. 2025-32 + cross-checked
 > secondary sources, see `_meta`). RMD divisors past age 100 are unverified approximations.
