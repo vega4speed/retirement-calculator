@@ -259,12 +259,19 @@ export async function mount(root) {
     reader.onload = () => {
       try {
         const data = JSON.parse(reader.result);
-        if (!Array.isArray(data.accounts)) throw new Error('not a snapshot (no accounts array)');
-        applySnapshot(data);
-        persist();
-        rebuild();
+        if (data.snapshot && typeof data.snapshot === 'object') {
+          // Full-state export (from "Share with Claude") — restore everything
+          loadScenario(data);
+        } else if (Array.isArray(data.accounts)) {
+          // Legacy snapshot-only export — restore accounts only
+          applySnapshot(data);
+          persist();
+          rebuild();
+        } else {
+          throw new Error('unrecognized file — expected a full-state or snapshot export from this app');
+        }
       } catch (err) {
-        alert(`Could not load snapshot: ${err.message}`);
+        alert(`Could not load file: ${err.message}`);
       }
     };
     reader.readAsText(file);
@@ -272,7 +279,39 @@ export async function mount(root) {
 
   function fileButton() {
     const input = h('input', { type: 'file', accept: 'application/json,.json', style: { display: 'none' }, onchange: onLoadFile });
-    return h('span', {}, h('button', { class: 'ghost', onclick: () => input.click() }, 'Import JSON'), input);
+    return h('span', {}, h('button', { class: 'ghost', onclick: () => input.click() }, 'Import / Restore'), input);
+  }
+
+  function exportForClaude() {
+    const r = computeProjection();
+    const lastYear = r?.years?.at(-1);
+    const endBalance = lastYear?.real?.endBalance ?? lastYear?.totals?.endBalance ?? null;
+    const exportObj = {
+      _meta: {
+        app: 'retirement-calculator',
+        format: 'full-state-v1',
+        exportedAt: todayISO(),
+        note: 'Share this file with Claude to discuss, evaluate, or model changes. Re-upload it via "Import / Restore" to restore this plan in the app.',
+      },
+      snapshot,
+      assumptions,
+      plan,
+      filing,
+      social,
+      summary: r ? {
+        retirementYear: r.retirementYear,
+        horizonYear: r.horizonYear,
+        survivesToHorizon: r.firstDepletionYear == null,
+        firstDepletionYear: r.firstDepletionYear ?? null,
+        endBalance: endBalance != null ? Math.round(endBalance) : null,
+        lifetimeTax: Math.round(r.lifetimeTax ?? 0),
+        lifetimeEffectiveTaxRate: r.lifetimeEffectiveTaxRate ?? null,
+        decumulationEffectiveTaxRate: r.decumulationEffectiveTaxRate ?? null,
+        lifetimeRothConversions: Math.round(r.lifetimeRothConversions ?? 0),
+        solvedSpending: r.solvedSpending != null ? Math.round(r.solvedSpending) : null,
+      } : null,
+    };
+    download(`retirement-plan-${todayISO()}.json`, JSON.stringify(exportObj, null, 2));
   }
 
   function settingRow(key, label, kind, perAccount) {
@@ -562,8 +601,9 @@ export async function mount(root) {
         h('p', { class: 'muted' }, 'Enter each account and its tax status. This stays in your browser — nothing is uploaded. Use Export to keep a backup file.'),
         editor.el,
         h('div', { class: 'toolbar' },
-          h('button', { onclick: () => download(`${snapshot.id}.snapshot.json`, JSON.stringify(snapshot, null, 2)) }, 'Export JSON'),
+          h('button', { onclick: exportForClaude }, 'Share with Claude'),
           fileButton(),
+          h('button', { class: 'ghost', onclick: () => download(`${snapshot.id}.snapshot.json`, JSON.stringify(snapshot, null, 2)) }, 'Export accounts only'),
           h('button', { class: 'ghost', onclick: () => replaceAccounts(EXAMPLE_ACCOUNTS) }, 'Load example accounts'),
           h('button', { class: 'ghost', onclick: () => { if (confirm('Clear all saved data in this browser?')) clearSaved(); } }, 'Clear'),
         ),
