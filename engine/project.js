@@ -20,7 +20,7 @@
 // [needs an income figure — not modeled yet] / HSA-specific max with its own escalation table).
 // See the design doc §4.1a for the full writeup.
 
-import { resolve } from './resolver.js';
+import { resolve, explainResolve } from './resolver.js';
 import {
   resolveYearTable, ordinaryTax, capitalGainsTax, standardDeduction, taxableSocialSecurity,
   requiredBeginningAge, rmdAmount, cumulativeFactor, bracketTopForRate, marginalRateForIncome,
@@ -356,6 +356,19 @@ export function projectAccumulation(p) {
         for (const id of wf.claimedAccountIds) claimedByWaterfall.add(id);
         runningBefore = wf.runningBefore;
       }
+      // An account the waterfall did NOT claim (a second account of a role it already filled)
+      // used to silently fall back to the global `contributions` default, stacking that same
+      // percentage/dollar figure on top of the waterfall's shared budget once per extra account --
+      // multiplying the intended contribution by however many similar accounts exist. Now it
+      // defaults to $0 instead, UNLESS the user set an override specifically for THIS account
+      // (byAccount/byAccountYear) -- that's a deliberate opt-back-in, still honored.
+      const resolveUnclaimedContribution = (accountId) => {
+        if (p.contributionWaterfallEnabled && !claimedByWaterfall.has(accountId)) {
+          const { level } = explainResolve(contributions, { accountId, year });
+          if (level !== 'byAccount' && level !== 'byAccountYear') return 0;
+        }
+        return num(resolve(contributions, { accountId, year }));
+      };
       for (const a of accounts) {
         if (a.taxStatus !== 'taxDeferred' && a.taxStatus !== 'hsa') continue;
         if (claimedByWaterfall.has(a.id)) continue;
@@ -369,7 +382,7 @@ export function projectAccumulation(p) {
           netContributionCost[a.id] = gross * (1 - accountFicaRate) - taxSaved;
           runningBefore = Math.max(0, runningBefore - gross);
         } else {
-          const raw = num(resolve(contributions, { accountId: a.id, year }));
+          const raw = resolveUnclaimedContribution(a.id);
           const netCost = contributionMode === 'percentOfIncome' ? raw * income : raw * cumWage;
           const gross = grossUpDeduction(netCost, runningBefore, brackets, accountFicaRate);
           contributionByAccount[a.id] = gross;
@@ -381,7 +394,7 @@ export function projectAccumulation(p) {
       for (const a of accounts) {
         if (a.taxStatus === 'taxDeferred' || a.taxStatus === 'hsa') continue;
         if (claimedByWaterfall.has(a.id)) continue;
-        const raw = num(resolve(contributions, { accountId: a.id, year }));
+        const raw = resolveUnclaimedContribution(a.id);
         contributionByAccount[a.id] = contributionMode === 'percentOfIncome' ? raw * income : raw * cumWage;
       }
     } else {

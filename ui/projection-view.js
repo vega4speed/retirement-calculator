@@ -199,9 +199,16 @@ function bracketDetailRow(colspan, breakdown) {
     ? h('p', { class: 'muted small' },
         `Marginal (top bracket touched): ${(topMarginalRate * 100).toFixed(0)}% · Effective (total tax ÷ total gross income): ${(breakdown.effectiveTaxRate * 100).toFixed(1)}%`)
     : null;
+  // Splits the tax bill into "tax on regular income" vs "tax on the Roth conversion" — the
+  // conversion sits as the TOP slice of ordinary taxable income (bracket-fill fills up to a
+  // ceiling, never past it), so this is an exact bracket-walk difference, not an estimate.
+  const conversionSplit = breakdown?.conversionAmount > 1e-9
+    ? h('p', { class: 'muted small' },
+        `Of this, ${usdFull(breakdown.taxOnConversion)} is tax on the ${usdFull(breakdown.conversionAmount)} Roth conversion; the remaining ${usdFull((breakdown.ordinary?.reduce((s, row) => s + row.tax, 0) || 0) - breakdown.taxOnConversion)} is tax on regular income.`)
+    : null;
   return h('tr', { class: 'bracket-detail' }, h('td', { colspan },
     (ordinary || ltcg)
-      ? h('div', {}, h('div', { class: 'bracket-detail-wrap' }, ordinary, ltcg), rateCompare)
+      ? h('div', {}, h('div', { class: 'bracket-detail-wrap' }, ordinary, ltcg), rateCompare, conversionSplit)
       : h('p', { class: 'muted small' }, 'No taxable income this year.'),
   ));
 }
@@ -236,14 +243,21 @@ function buildTable(result, opts = {}) {
 
   const bodyRows = [];
   for (const r of rows) {
-    const income = r.totals.grossIncome || 0;
-    const clickableTax = hasTax && bracketBreakdownFor && r.phase === 'decumulation' && r.totals.tax > 0.005;
+    // The Income column and %-of-income annotations on contribution/match/conversion figures
+    // all mean "share of what you actually earned" — during accumulation that's wages alone
+    // (`totals.income`), NOT wages + any Roth conversion (`totals.grossIncome`): a conversion is
+    // money moving between your own accounts, not new income, and it already has its own column.
+    // Decumulation has no separate wage figure, so grossIncome (which there already folds the
+    // conversion into the withdrawal, not additively) is the only "income" concept available.
+    const displayIncome = r.phase === 'decumulation' ? (r.totals.grossIncome || 0) : (r.totals.income || 0);
+    const taxIncome = r.totals.grossIncome || 0; // effectiveTaxRate's own denominator — tax legitimately falls on the conversion too
+    const clickableTax = hasTax && bracketBreakdownFor && r.totals.tax > 0.005;
     const taxCell = !hasTax ? null
       : !r.totals.tax ? h('td', { class: 'r' }, '—')
       : clickableTax
         ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year) },
-            usdFull(val(r.totals.tax, r)), pct(r.totals.tax, income), ' ', expandedYear === r.year ? '▾' : '▸'))
-        : h('td', { class: 'r' }, usdFull(val(r.totals.tax, r)), pct(r.totals.tax, income));
+            usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome), ' ', expandedYear === r.year ? '▾' : '▸'))
+        : h('td', { class: 'r' }, usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome));
 
     const perAccountCells = perAccountIds.map((id) => {
       const a = r.accounts[id];
@@ -251,8 +265,8 @@ function buildTable(result, opts = {}) {
       const match = a?.employerMatch || 0;
       if (contribution <= 1e-9 && match <= 1e-9) return h('td', { class: 'r' }, '—');
       return h('td', { class: 'r' },
-        h('div', {}, usdFull(val(contribution, r))),
-        match > 1e-9 ? h('div', { class: 'muted small' }, `+${usdFull(val(match, r))} match`) : null,
+        h('div', {}, usdFull(val(contribution, r)), pct(contribution, displayIncome)),
+        match > 1e-9 ? h('div', { class: 'muted small' }, `+${usdFull(val(match, r))} match${pct(match, displayIncome)}`) : null,
       );
     });
 
@@ -260,14 +274,14 @@ function buildTable(result, opts = {}) {
       h('td', {}, r.year),
       h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       hasAge ? h('td', { class: 'r' }, r.age ?? '—') : null,
-      hasTax ? h('td', { class: 'r' }, income ? usdFull(val(income, r)) : '—') : null,
-      h('td', { class: 'r' }, r.totals.contribution ? [usdFull(val(r.totals.contribution, r)), pct(r.totals.contribution, income)] : '—'),
-      hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? usdFull(val(r.totals.employerMatch, r)) : '—') : null,
+      hasTax ? h('td', { class: 'r' }, displayIncome ? usdFull(val(displayIncome, r)) : '—') : null,
+      h('td', { class: 'r' }, r.totals.contribution ? [usdFull(val(r.totals.contribution, r)), pct(r.totals.contribution, displayIncome)] : '—'),
+      hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? [usdFull(val(r.totals.employerMatch, r)), pct(r.totals.employerMatch, displayIncome)] : '—') : null,
       ...perAccountCells,
       h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(val(r.totals.withdrawal, r)) : '—'),
       taxCell,
       hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(val(r.totals.netSpendable, r)) : '—') : null,
-      hasConversion ? h('td', { class: 'r' }, r.totals.conversion ? usdFull(val(r.totals.conversion, r)) : '—') : null,
+      hasConversion ? h('td', { class: 'r' }, r.totals.conversion ? [usdFull(val(r.totals.conversion, r)), pct(r.totals.conversion, displayIncome)] : '—') : null,
       h('td', { class: 'r' }, usdFull(val(r.totals.growth, r))),
       h('td', { class: 'r' }, usdFull(val(r.totals.endBalance, r))),
     ));

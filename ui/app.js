@@ -92,6 +92,10 @@ export async function mount(root) {
 
   // Recomputes a year's ordinary + capital-gains bracket breakdown on demand (clicking a Tax
   // cell), rather than storing it on every ledger row — cheap to redo, keeps the ledger lean.
+  // Works for both phases: decumulation rows carry ordinaryTaxableIncome/capitalGain (LTCG is a
+  // decumulation-only concept — no cost-basis sales during accumulation), accumulation rows only
+  // carry taxableIncome (which IS the ordinary taxable income in that phase, just under a
+  // different field name since there's no capital-gains stacking to distinguish it from).
   function bracketBreakdownFor(row) {
     if (!taxTables) return null;
     const yearTable = resolveYearTable({
@@ -100,11 +104,28 @@ export async function mount(root) {
     });
     const age65Count = row.age != null && row.age >= 65 ? 1 : 0;
     const stdDeduction = standardDeduction({ filingStatus: filing.filingStatus, age65Count, yearTable });
-    const ordinary = bracketBreakdown(row.totals.ordinaryTaxableIncome, yearTable.ordinaryBrackets[filing.filingStatus]);
-    const ltcg = row.totals.capitalGain > 0
-      ? bracketBreakdown(row.totals.capitalGain, yearTable.ltcgBrackets[filing.filingStatus], row.totals.ordinaryTaxableIncome)
+    const ordinaryTaxableIncome = row.totals.ordinaryTaxableIncome ?? row.totals.taxableIncome ?? 0;
+    const capitalGain = row.totals.capitalGain ?? 0;
+    const ordinary = bracketBreakdown(ordinaryTaxableIncome, yearTable.ordinaryBrackets[filing.filingStatus]);
+    const ltcg = capitalGain > 0
+      ? bracketBreakdown(capitalGain, yearTable.ltcgBrackets[filing.filingStatus], ordinaryTaxableIncome)
       : [];
-    return { ordinary, ltcg, stdDeduction, effectiveTaxRate: row.totals.effectiveTaxRate };
+    // A Roth conversion (either phase) is added as the TOP slice of ordinary taxable income —
+    // bracket-fill sequencing converts exactly up to a bracket ceiling, never past it — so its
+    // tax cost is an EXACT bracket-walk difference (tax on everything minus tax on everything
+    // except the conversion), not a flat-rate approximation.
+    const conversionAmount = row.totals.conversion || 0;
+    let taxOnConversion = 0;
+    if (conversionAmount > 1e-9) {
+      const withoutConversion = Math.max(0, ordinaryTaxableIncome - conversionAmount);
+      taxOnConversion = ordinaryTax(ordinaryTaxableIncome, filing.filingStatus, yearTable)
+        - ordinaryTax(withoutConversion, filing.filingStatus, yearTable);
+    }
+    return {
+      ordinary, ltcg, stdDeduction, effectiveTaxRate: row.totals.effectiveTaxRate,
+      conversionAmount, taxOnConversion,
+      wageIncome: row.phase === 'decumulation' ? null : (row.totals.income || 0),
+    };
   }
 
   // Live "here's what that produces" readout for the Social Security section — recomputed from
