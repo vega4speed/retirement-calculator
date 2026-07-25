@@ -213,13 +213,89 @@ function bracketDetailRow(colspan, breakdown) {
   ));
 }
 
+// Per-account gross/tax-saved/FICA-saved/net-cost table for a clicked "Total contribution" cell
+// (accumulation years). `toDisplay` applies the table's own nominal/today's-$ mode toggle.
+function contributionDetailRow(colspan, breakdown, toDisplay) {
+  if (!breakdown?.accounts?.length) {
+    return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('p', { class: 'muted small' }, 'No contributions this year.')));
+  }
+  const totalTaxSaved = breakdown.accounts.reduce((s, a) => s + a.taxSaved, 0);
+  const totalFicaSaved = breakdown.accounts.reduce((s, a) => s + a.ficaSaved, 0);
+  const table = h('table', { class: 'bracket-mini' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Account'), h('th', { class: 'r' }, 'Gross'), h('th', { class: 'r' }, 'Tax saved'),
+      h('th', { class: 'r' }, 'FICA saved'), h('th', { class: 'r' }, 'Net cost'))),
+    h('tbody', {}, ...breakdown.accounts.map((a) => h('tr', {},
+      h('td', {}, a.label),
+      h('td', { class: 'r' }, usdFull(toDisplay(a.gross))),
+      h('td', { class: 'r' }, a.taxSaved > 0.5 ? usdFull(toDisplay(a.taxSaved)) : '—'),
+      h('td', { class: 'r' }, a.ficaSaved > 0.5 ? usdFull(toDisplay(a.ficaSaved)) : '—'),
+      h('td', { class: 'r' }, usdFull(toDisplay(a.netCost))),
+    ))),
+  );
+  const savedNote = (totalTaxSaved > 0.5 || totalFicaSaved > 0.5)
+    ? ` — ${usdFull(toDisplay(totalTaxSaved))} in tax and ${usdFull(toDisplay(totalFicaSaved))} in FICA avoided`
+    : '';
+  const summary = h('p', { class: 'muted small' },
+    `${usdFull(toDisplay(breakdown.totalGross))} gross across these accounts cost ${usdFull(toDisplay(breakdown.totalNetCost))} out of your paycheck${savedNote}.`);
+  return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('div', {}, h('div', { class: 'bracket-detail-wrap' }, table), summary)));
+}
+
+const WITHDRAWAL_TAX_STATUS_LABEL = {
+  taxDeferred: 'Tax-deferred', roth: 'Roth', taxable: 'Taxable / brokerage', hsa: 'HSA', cash: 'Cash / savings',
+};
+
+// Per-account withdrawal breakdown for a clicked "Withdrawal" cell (decumulation years), with the
+// RMD floor (and the math behind it) for any tax-deferred account past the required-beginning age.
+function withdrawalDetailRow(colspan, breakdown, toDisplay) {
+  if (!breakdown?.accounts?.length) {
+    return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('p', { class: 'muted small' }, 'No withdrawal this year.')));
+  }
+  const table = h('table', { class: 'bracket-mini' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Account'), h('th', {}, 'Type'), h('th', { class: 'r' }, 'Withdrawn'), h('th', { class: 'r' }, 'RMD required'))),
+    h('tbody', {}, ...breakdown.accounts.map((a) => h('tr', {},
+      h('td', {}, a.label),
+      h('td', { class: 'muted small' }, WITHDRAWAL_TAX_STATUS_LABEL[a.taxStatus] || a.taxStatus),
+      h('td', { class: 'r' }, usdFull(toDisplay(a.withdrawal))),
+      h('td', { class: 'r' }, a.rmdFloor != null ? usdFull(toDisplay(a.rmdFloor)) : '—'),
+    ))),
+  );
+  const rmdNote = breakdown.accounts.some((a) => a.rmdFloor != null)
+    ? h('p', { class: 'muted small' },
+        `RMD required = prior year-end balance ÷ the IRS uniform-lifetime divisor for age ${breakdown.age} (SECURE 2.0's required-beginning-age rule).`)
+    : null;
+  return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('div', {}, h('div', { class: 'bracket-detail-wrap' }, table), rmdNote)));
+}
+
+// The whole-portfolio equation behind this row's Balance column -- pure arithmetic already on
+// `r.totals` (matches rowTotals()'s own identity in engine/project.js exactly), no extra data.
+function balanceDetailRow(colspan, r, toDisplay) {
+  const t = r.totals;
+  const parts = [`Start ${usdFull(toDisplay(t.startBalance))}`];
+  if (r.phase === 'decumulation') {
+    if (t.withdrawal) parts.push(`− Withdrawals ${usdFull(toDisplay(t.withdrawal))}`);
+    if (t.reinvestment) parts.push(`+ RMD surplus reinvested ${usdFull(toDisplay(t.reinvestment))}`);
+    parts.push(`+ Growth ${usdFull(toDisplay(t.growth))}`);
+    if (t.conversion) parts.push(`(+ ${usdFull(toDisplay(t.conversion))} converted to Roth this year, moved within your own accounts)`);
+  } else {
+    parts.push(`+ Growth ${usdFull(toDisplay(t.growth))}`);
+    if (t.contribution) parts.push(`+ Your contributions ${usdFull(toDisplay(t.contribution))}`);
+    if (t.employerMatch) parts.push(`+ Employer match ${usdFull(toDisplay(t.employerMatch))}`);
+    if (t.conversion) parts.push(`(${usdFull(toDisplay(t.conversion))} converted to Roth this year, moved within your own accounts -- nets to $0 across all accounts)`);
+  }
+  parts.push(`= End ${usdFull(toDisplay(t.endBalance))}`);
+  return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('p', { class: 'muted small' }, parts.join('  '))));
+}
+
 function buildTable(result, opts = {}) {
   const rows = result.years;
   const hasTax = rows.some((r) => r.totals.tax);
   const hasAge = rows.some((r) => r.age != null);
   const hasConversion = rows.some((r) => r.totals.conversion);
   const hasMatch = rows.some((r) => r.totals.employerMatch);
-  const { expandedYear, onToggleExpand, bracketBreakdownFor } = opts;
+  const { expandedCells, onToggleExpand, bracketBreakdownFor, contributionBreakdownFor, withdrawalBreakdownFor } = opts;
+  const isExpanded = (year, col) => expandedCells.has(`${year}:${col}`);
   const getAccountLabel = opts.getAccountLabel || ((id) => id);
   const mode = opts.mode === 'real' ? 'real' : 'nominal'; // 'nominal' | 'real' (today's $)
 
@@ -251,13 +327,37 @@ function buildTable(result, opts = {}) {
     // conversion into the withdrawal, not additively) is the only "income" concept available.
     const displayIncome = r.phase === 'decumulation' ? (r.totals.grossIncome || 0) : (r.totals.income || 0);
     const taxIncome = r.totals.grossIncome || 0; // effectiveTaxRate's own denominator — tax legitimately falls on the conversion too
+    const toDisplay = (v) => val(v, r);
     const clickableTax = hasTax && bracketBreakdownFor && r.totals.tax > 0.005;
     const taxCell = !hasTax ? null
       : !r.totals.tax ? h('td', { class: 'r' }, '—')
       : clickableTax
-        ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year) },
-            usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome), ' ', expandedYear === r.year ? '▾' : '▸'))
+        ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year, 'tax') },
+            usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome), ' ', isExpanded(r.year, 'tax') ? '▾' : '▸'))
         : h('td', { class: 'r' }, usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome));
+
+    const clickableContribution = contributionBreakdownFor && r.totals.contribution > 0.5;
+    const contributionCell = !r.totals.contribution ? h('td', { class: 'r' }, '—')
+      : clickableContribution
+        ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year, 'contribution') },
+            usdFull(val(r.totals.contribution, r)), pct(r.totals.netContributionCost ?? r.totals.contribution, displayIncome), ' ', isExpanded(r.year, 'contribution') ? '▾' : '▸'))
+        : h('td', { class: 'r' }, usdFull(val(r.totals.contribution, r)), pct(r.totals.netContributionCost ?? r.totals.contribution, displayIncome));
+
+    const clickableWithdrawal = withdrawalBreakdownFor && r.totals.withdrawal > 0.5;
+    const withdrawalCell = !r.totals.withdrawal ? h('td', { class: 'r' }, '—')
+      : clickableWithdrawal
+        ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year, 'withdrawal') },
+            usdFull(val(r.totals.withdrawal, r)), ' ', isExpanded(r.year, 'withdrawal') ? '▾' : '▸'))
+        : h('td', { class: 'r' }, usdFull(val(r.totals.withdrawal, r)));
+
+    // The Balance equation is pure arithmetic already on the row -- no external data needed, so
+    // it's clickable whenever there's actually something to explain (skips the inert baseline row).
+    const hasBalanceDetail = !!(r.totals.growth || r.totals.contribution || r.totals.employerMatch
+      || r.totals.withdrawal || r.totals.conversion || r.totals.reinvestment);
+    const balanceCell = hasBalanceDetail
+      ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year, 'balance') },
+          usdFull(val(r.totals.endBalance, r)), ' ', isExpanded(r.year, 'balance') ? '▾' : '▸'))
+      : h('td', { class: 'r' }, usdFull(val(r.totals.endBalance, r)));
 
     // %-of-income annotations reflect NET take-home cost, not the gross dollars landing in the
     // account, whenever the two differ (a Traditional/HSA account's tax deduction + any FICA
@@ -284,20 +384,27 @@ function buildTable(result, opts = {}) {
       h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       hasAge ? h('td', { class: 'r' }, r.age ?? '—') : null,
       hasTax ? h('td', { class: 'r' }, displayIncome ? usdFull(val(displayIncome, r)) : '—') : null,
-      h('td', { class: 'r' }, r.totals.contribution
-        ? [usdFull(val(r.totals.contribution, r)), pct(r.totals.netContributionCost ?? r.totals.contribution, displayIncome)]
-        : '—'),
+      contributionCell,
       hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? [usdFull(val(r.totals.employerMatch, r)), pct(r.totals.employerMatch, displayIncome)] : '—') : null,
       ...perAccountCells,
-      h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(val(r.totals.withdrawal, r)) : '—'),
+      withdrawalCell,
       taxCell,
       hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(val(r.totals.netSpendable, r)) : '—') : null,
       hasConversion ? h('td', { class: 'r' }, r.totals.conversion ? [usdFull(val(r.totals.conversion, r)), pct(r.totals.conversion, displayIncome)] : '—') : null,
       h('td', { class: 'r' }, usdFull(val(r.totals.growth, r))),
-      h('td', { class: 'r' }, usdFull(val(r.totals.endBalance, r))),
+      balanceCell,
     ));
-    if (clickableTax && expandedYear === r.year) {
+    if (clickableContribution && isExpanded(r.year, 'contribution')) {
+      bodyRows.push(contributionDetailRow(colCount, contributionBreakdownFor(r), toDisplay));
+    }
+    if (clickableTax && isExpanded(r.year, 'tax')) {
       bodyRows.push(bracketDetailRow(colCount, bracketBreakdownFor(r)));
+    }
+    if (clickableWithdrawal && isExpanded(r.year, 'withdrawal')) {
+      bodyRows.push(withdrawalDetailRow(colCount, withdrawalBreakdownFor(r), toDisplay));
+    }
+    if (hasBalanceDetail && isExpanded(r.year, 'balance')) {
+      bodyRows.push(balanceDetailRow(colCount, r, toDisplay));
     }
   }
 
@@ -323,9 +430,14 @@ function buildTable(result, opts = {}) {
 export function createProjectionView(opts = {}) {
   const el = h('div');
   const bracketBreakdownFor = opts.bracketBreakdownFor;
+  const contributionBreakdownFor = opts.contributionBreakdownFor;
+  const withdrawalBreakdownFor = opts.withdrawalBreakdownFor;
   const getAccountLabel = opts.getAccountLabel || ((id) => id);
   let showTable = false;
-  let expandedYear = null;
+  // Keys are `${year}:${column}` (column: 'tax'|'contribution'|'withdrawal'|'balance') -- a Set
+  // rather than a single scalar so multiple expansions (even in the same row) can be open at once,
+  // unlike the single-Tax-cell `expandedYear` this replaced.
+  let expandedCells = new Set();
   let current = null;
   let tableMode = 'nominal'; // 'nominal' | 'real' -- see buildTable's docs
 
@@ -387,11 +499,17 @@ export function createProjectionView(opts = {}) {
     ];
     if (showTable) {
       parts.push(buildTable(r, {
-        expandedYear,
+        expandedCells,
         bracketBreakdownFor,
+        contributionBreakdownFor,
+        withdrawalBreakdownFor,
         getAccountLabel,
         mode: tableMode,
-        onToggleExpand: (year) => { expandedYear = expandedYear === year ? null : year; render(); },
+        onToggleExpand: (year, column) => {
+          const key = `${year}:${column}`;
+          if (expandedCells.has(key)) expandedCells.delete(key); else expandedCells.add(key);
+          render();
+        },
       }));
     }
     el.append(...parts);

@@ -60,6 +60,40 @@ test('HSA via payroll (default) also saves FICA on top of income tax -- lower ta
   approx(hsaNoPayroll.accounts.a.netCost, 3432);   // income-tax savings only, same as a 401(k) would get
   approx(hsaPayroll.accounts.a.netCost, 3095.4);   // ALSO saves FICA -- strictly cheaper take-home cost
   assert.ok(hsaPayroll.accounts.a.netCost < hsaNoPayroll.accounts.a.netCost, 'paying via payroll must cost less take-home for the identical gross deposit');
+  // taxSaved/ficaSaved split the (gross - netCost) gap EXACTLY: ficaSaved is a fixed, known rate
+  // (0 unless HSA-via-payroll), taxSaved is whatever's left -- both cases save the SAME $968 in
+  // income tax (4400 * the 22% bracket), differing only in whether FICA was also avoided.
+  approx(hsaNoPayroll.accounts.a.ficaSaved, 0);
+  approx(hsaNoPayroll.accounts.a.taxSaved, 968);
+  approx(hsaPayroll.accounts.a.ficaSaved, 4400 * 0.0765);
+  approx(hsaPayroll.accounts.a.taxSaved, 968);
+  approx(hsaPayroll.accounts.a.taxSaved + hsaPayroll.accounts.a.ficaSaved, 4400 - 3095.4, 1e-6);
+});
+
+test('taxSaved/ficaSaved: a Traditional 401(k) NEVER gets a FICA exemption, regardless of method', () => {
+  const r = projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [{ id: 'trad401k', balance: 0, taxStatus: 'taxDeferred' }],
+    returnRate: { default: 0 }, contributions: { default: 3000 }, wageGrowth: { default: 0 },
+    income: { default: 80000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+  });
+  const y = row(r, 2027);
+  approx(y.accounts.trad401k.ficaSaved, 0);
+  approx(y.accounts.trad401k.taxSaved, y.accounts.trad401k.contribution - y.accounts.trad401k.netCost);
+});
+
+test('taxSaved/ficaSaved are undefined for Roth/taxable/cash accounts (no gross-up to report)', () => {
+  const r = projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [{ id: 'roth1', balance: 0, taxStatus: 'roth' }],
+    returnRate: { default: 0 }, contributions: { default: 3000 }, wageGrowth: { default: 0 },
+    income: { default: 80000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+  });
+  const y = row(r, 2027);
+  assert.equal(y.accounts.roth1.taxSaved, undefined);
+  assert.equal(y.accounts.roth1.ficaSaved, undefined);
 });
 
 test('HSA joins the SAME deduction pool as a taxDeferred account (reduces taxable income like a 401(k))', () => {

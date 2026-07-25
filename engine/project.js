@@ -533,7 +533,16 @@ export function projectAccumulation(p) {
       // contribution-semantics docs above) -- undefined for roth/taxable/cash, where the
       // contribution figure already IS the take-home cost (no gross-up to report).
       const netCost = netContributionCost[a.id];
-      acc[a.id] = { startBalance, contribution, employerMatch, netCost, conversion: conversionFlow[a.id], growth, endBalance };
+      // taxSaved/ficaSaved: splits the (contribution - netCost) gap EXACTLY, not by estimating a
+      // rate -- ficaRate only ever applies to an HSA-via-payroll account (Traditional 401(k)/IRA
+      // NEVER get a FICA exemption, regardless of contribution method, a real tax-law fact this
+      // app already models elsewhere), so ficaSaved is a fixed, known-correct amount and taxSaved
+      // is simply whatever's left of the gap -- correct regardless of which code path (the
+      // waterfall's tiers or the independent per-account gross-up) produced the contribution.
+      const accountFicaRate = a.taxStatus === 'hsa' && a.hsaViaPayroll !== false ? ficaRate : 0;
+      const ficaSaved = netCost != null ? contribution * accountFicaRate : undefined;
+      const taxSaved = netCost != null ? contribution - netCost - ficaSaved : undefined;
+      acc[a.id] = { startBalance, contribution, employerMatch, netCost, taxSaved, ficaSaved, conversion: conversionFlow[a.id], growth, endBalance };
       if (netCost != null) netContributionCostTotal += netCost;
     }
     // NOT auto-summed via rowTotals: acc[id].conversion is SIGNED (negative on the source

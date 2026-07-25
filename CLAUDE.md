@@ -437,6 +437,27 @@ a real user's exported plan. No role set anywhere ⇒ byte-identical to prior be
    what actually left your paycheck to fund it (e.g. "$9,013 (4.1%)" for an HSA max-out, not gross
    ÷ income).
 
+**Three more expandable table rows (2026-07-25):** the Tax cell's per-bracket expand (Phase 4)
+now has three siblings, all using the SAME `expandedCells`/`onToggleExpand(year, column)`
+mechanism (generalized from a single `expandedYear` scalar to a `Set<'${year}:${column}'>` so
+multiple expansions, even in the same row, can be open together — Tax, Contribution, Withdrawal,
+Balance are now independent). **Total contribution** expands to a per-account gross/tax-saved/
+FICA-saved/net-cost table, answering "why did a $9,013 HSA deposit only cost $6,330" with EXACT
+(not estimated) numbers: `engine/project.js` now attaches `taxSaved`/`ficaSaved` to each
+accumulation account record, splitting the already-exact `contribution - netCost` gap using each
+account's own known FICA-exemption status (fixed by tax law: only HSA-via-payroll gets one, ever)
+— no new engine tracking needed through the waterfall or gross-up code paths, just two fields
+computed once alongside the existing `netCost`. **Balance** expands to the whole-portfolio
+equation for that row (Start + Growth + Contributions + Match = End, or the decumulation
+equivalent with Withdrawals/RMD-surplus-reinvestment) — pure arithmetic already on `row.totals`,
+no engine change needed. **Withdrawal** expands to a per-account breakdown grouped by tax status,
+with the RMD floor (and the exact math behind it) for any tax-deferred account past the
+required-beginning age — recomputed in the UI via `tax.requiredBeginningAge`/`tax.rmdAmount`,
+using `row.accounts[id].startBalance` as the prior-year-end-balance input, which is EXACTLY the
+same value `project.js`'s own internal RMD forcing already uses (confirmed by reading the engine,
+not assumed), so the displayed math always matches what the engine actually did — no
+previous-row lookup or new engine field needed either.
+
 **Fixed 2026-07-22 (two small UI bugs):**
 1. Clicking a Tax cell to expand its per-bracket breakdown — or toggling "Show table" — fully
    rebuilds the projection view's DOM, which silently reset the page's scroll position to the

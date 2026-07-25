@@ -13,7 +13,7 @@ import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
 import { resolve } from '../engine/resolver.js';
-import { resolveYearTable, bracketBreakdown, standardDeduction, ordinaryTax, marginalRateForIncome, traditionalVsRothVerdict, grossUpDeduction } from '../engine/tax.js';
+import { resolveYearTable, bracketBreakdown, standardDeduction, ordinaryTax, marginalRateForIncome, traditionalVsRothVerdict, grossUpDeduction, requiredBeginningAge, rmdAmount } from '../engine/tax.js';
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from '../engine/socialsecurity.js';
 import { projectFor, TAX_ANCHOR_YEAR } from './project-adapter.js';
 import { createScenariosView } from './scenarios.js';
@@ -128,6 +128,44 @@ export async function mount(root) {
     };
   }
 
+  // Per-account gross/tax-saved/FICA-saved/net-cost breakdown for a clicked "Total contribution"
+  // cell (accumulation years). taxSaved/ficaSaved/netCost come straight from project.js (exact,
+  // not estimated here) — this just labels and totals them per account.
+  function contributionBreakdownFor(row) {
+    const accounts = Object.entries(row.accounts)
+      .filter(([, a]) => (a.contribution || 0) > 1e-9)
+      .map(([id, a]) => ({
+        id, label: snapshot.accounts.find((acc) => acc.id === id)?.label || id,
+        gross: a.contribution, taxSaved: a.taxSaved || 0, ficaSaved: a.ficaSaved || 0,
+        netCost: a.netCost ?? a.contribution,
+      }));
+    return {
+      accounts,
+      totalGross: row.totals.contribution || 0,
+      totalNetCost: row.totals.netContributionCost ?? row.totals.contribution ?? 0,
+    };
+  }
+
+  // Per-account withdrawal breakdown grouped by tax status (decumulation years), plus the RMD
+  // floor for any tax-deferred account past the SECURE 2.0 required-beginning age. The RMD floor
+  // is recomputed here via the SAME formula project.js's own RMD forcing uses
+  // (`tax.rmdAmount(age, priorYearEndBalance, taxTables.rmd)`) — `row.accounts[id].startBalance`
+  // IS already that account's prior year-end balance, so this is an exact match, not an estimate.
+  function withdrawalBreakdownFor(row) {
+    if (!taxTables?.rmd) return null;
+    const rbAge = Number.isFinite(filing.birthYear) ? requiredBeginningAge(filing.birthYear, taxTables.rmd) : null;
+    const accounts = Object.entries(row.accounts)
+      .filter(([, a]) => (a.withdrawal || 0) > 1e-9)
+      .map(([id, a]) => {
+        const acct = snapshot.accounts.find((x) => x.id === id);
+        const taxStatus = acct?.taxStatus || 'unknown';
+        const isRmdAge = taxStatus === 'taxDeferred' && rbAge != null && row.age != null && row.age >= rbAge;
+        const rmdFloor = isRmdAge ? rmdAmount(row.age, a.startBalance, taxTables.rmd) : null;
+        return { id, label: acct?.label || id, taxStatus, withdrawal: a.withdrawal, rmdFloor, priorBalance: a.startBalance };
+      });
+    return { accounts, totalWithdrawal: row.totals.withdrawal || 0, age: row.age };
+  }
+
   // Live "here's what that produces" readout for the Social Security section — recomputed from
   // the same engine functions the projection itself uses, so it never drifts from the real result.
   // ssEstimateBox (below) is a PERSISTENT element updated from refreshProjection(), same reason
@@ -178,6 +216,8 @@ export async function mount(root) {
 
   const projectionView = createProjectionView({
     bracketBreakdownFor,
+    contributionBreakdownFor,
+    withdrawalBreakdownFor,
     getAccountLabel: (id) => snapshot.accounts.find((a) => a.id === id)?.label || id,
   });
 
