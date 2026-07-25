@@ -417,6 +417,26 @@ per-account-columns diagnosis above found an "AF Match" account sitting alongsid
 a real user's exported plan. No role set anywhere ⇒ byte-identical to prior behavior (the legacy
 "first account of a taxStatus" rule is the fallback at every tier).
 
+**Fixed 2026-07-25, two waterfall-role follow-ups (same user, same session):**
+1. Marking one Roth account `employerPlan` didn't stop the household's OTHER, unrelated Roth
+   accounts from being swept into the Roth-IRA fallback tier ("first Roth account not already
+   claimed") — which computes its own contribution and ignores that account's independent
+   `contributions` override entirely, even a deliberate $0. Added `waterfallRole: 'none'` to opt
+   an account out of every fallback search (employer plan, employer match, Roth IRA) so "auto-pick
+   something for this tier" can never reach it.
+2. The table's %-of-income next to "Total contribution" read as more than a 15%-of-income
+   waterfall budget (e.g. 16.7%) because it divided the GROSS dollars landing in accounts by
+   income, while the budget itself is a NET take-home figure — an HSA's tax deduction + FICA
+   exemption (via payroll) means its gross deposit is legitimately larger than what left your
+   paycheck to fund it. `computeContributionWaterfall` now tracks a `netContributionCostByAccount`
+   map (the delta in `remainingBudget` around each tier's funding call — generic across every
+   tier, not tier-specific math) merged into the SAME `netContributionCost`/`netCost` fields the
+   take-home-pay-anchored contribution model (Phase 6.6) already exposed for the non-waterfall
+   path; the table's %-of-income annotations now use net cost when it's available, so the total
+   reconciles back to exactly the budget percentage, and each tax-advantaged account's own % shows
+   what actually left your paycheck to fund it (e.g. "$9,013 (4.1%)" for an HSA max-out, not gross
+   ÷ income).
+
 **Fixed 2026-07-22 (two small UI bugs):**
 1. Clicking a Tax cell to expand its per-bracket breakdown — or toggling "Show table" — fully
    rebuilds the projection view's DOM, which silently reset the page's scroll position to the

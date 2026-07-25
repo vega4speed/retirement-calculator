@@ -259,13 +259,22 @@ function buildTable(result, opts = {}) {
             usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome), ' ', expandedYear === r.year ? '▾' : '▸'))
         : h('td', { class: 'r' }, usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome));
 
+    // %-of-income annotations reflect NET take-home cost, not the gross dollars landing in the
+    // account, whenever the two differ (a Traditional/HSA account's tax deduction + any FICA
+    // exemption means less actually left your paycheck than what shows up in the account) —
+    // otherwise a 15%-of-income waterfall budget visibly reads as "16.7%" once an HSA's tax/FICA
+    // savings are counted as if they'd cost you take-home pay, which they didn't. `netCost` is
+    // `undefined` for Roth/taxable/cash (no gross-up there -- contribution already IS the net
+    // cost), so those fall back to the raw contribution figure, identical either way.
+    const netBasis = (account, fallback) => (account?.netCost != null ? account.netCost : fallback);
+
     const perAccountCells = perAccountIds.map((id) => {
       const a = r.accounts[id];
       const contribution = a?.contribution || 0;
       const match = a?.employerMatch || 0;
       if (contribution <= 1e-9 && match <= 1e-9) return h('td', { class: 'r' }, '—');
       return h('td', { class: 'r' },
-        h('div', {}, usdFull(val(contribution, r)), pct(contribution, displayIncome)),
+        h('div', {}, usdFull(val(contribution, r)), pct(netBasis(a, contribution), displayIncome)),
         match > 1e-9 ? h('div', { class: 'muted small' }, `+${usdFull(val(match, r))} match${pct(match, displayIncome)}`) : null,
       );
     });
@@ -275,7 +284,9 @@ function buildTable(result, opts = {}) {
       h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       hasAge ? h('td', { class: 'r' }, r.age ?? '—') : null,
       hasTax ? h('td', { class: 'r' }, displayIncome ? usdFull(val(displayIncome, r)) : '—') : null,
-      h('td', { class: 'r' }, r.totals.contribution ? [usdFull(val(r.totals.contribution, r)), pct(r.totals.contribution, displayIncome)] : '—'),
+      h('td', { class: 'r' }, r.totals.contribution
+        ? [usdFull(val(r.totals.contribution, r)), pct(r.totals.netContributionCost ?? r.totals.contribution, displayIncome)]
+        : '—'),
       hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? [usdFull(val(r.totals.employerMatch, r)), pct(r.totals.employerMatch, displayIncome)] : '—') : null,
       ...perAccountCells,
       h('td', { class: 'r' }, r.totals.withdrawal ? usdFull(val(r.totals.withdrawal, r)) : '—'),

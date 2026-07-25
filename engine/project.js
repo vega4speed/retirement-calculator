@@ -108,7 +108,7 @@ function rowTotals(accounts, extraKeys) {
  * @param {number} [p.matchCapPercent]  fraction of income eligible for match; default DEFAULT_MATCH_CAP_PERCENT
  * @param {number} p.budget             this year's overall NET take-home budget
  * @param {object} p.fixedTables        tax-tables.json's `fixed` block (for hsaContributionLimit)
- * @returns {{contributionByAccount:Record<string,number>, employerMatchByAccount:Record<string,number>, claimedAccountIds:Set<string>, runningBefore:number}}
+ * @returns {{contributionByAccount:Record<string,number>, employerMatchByAccount:Record<string,number>, netContributionCostByAccount:Record<string,number>, claimedAccountIds:Set<string>, runningBefore:number}}
  */
 function computeContributionWaterfall(p) {
   const { accounts, income, age, filingStatus, ficaRate, hsaCoverage, yearTable, fixedTables } = p;
@@ -118,9 +118,21 @@ function computeContributionWaterfall(p) {
 
   const contributionByAccount = {};
   const employerMatchByAccount = {};
+  const netContributionCostByAccount = {};
   const claimedAccountIds = new Set();
   let runningBefore = p.runningBefore;
   let remainingBudget = Math.max(0, num(p.budget));
+
+  // Every tier spends `remainingBudget` (a NET take-home figure) by exactly its net cost,
+  // regardless of tier -- so the budget delta around a funding call IS that account's net cost,
+  // with no need to duplicate each tier's own gross-up math. Accumulates (not overwrites) since
+  // the employer-plan account can be funded twice (the match-cap tier, then the tier-4 spillover).
+  const trackNetCost = (accountId, fn) => {
+    const before = remainingBudget;
+    const result = fn();
+    netContributionCostByAccount[accountId] = (netContributionCostByAccount[accountId] || 0) + (before - remainingBudget);
+    return result;
+  };
 
   const taxSavedFor = (gross) =>
     ordinaryTax(runningBefore, filingStatus, yearTable) - ordinaryTax(Math.max(0, runningBefore - gross), filingStatus, yearTable);
@@ -181,7 +193,7 @@ function computeContributionWaterfall(p) {
     }
     const matchCap = matchCapPercent * income;
     const tier1Desired = Math.min(matchCap, electiveRoom);
-    const tier1Actual = fundEmployerPlan(employerPlanAccount, tier1Desired);
+    const tier1Actual = trackNetCost(employerPlanAccount.id, () => fundEmployerPlan(employerPlanAccount, tier1Desired));
     contributionByAccount[employerPlanAccount.id] = tier1Actual;
     if (employerMatchAccount) {
       employerMatchByAccount[employerMatchAccount.id] = tier1Actual * matchRate;
@@ -193,7 +205,7 @@ function computeContributionWaterfall(p) {
     claimedAccountIds.add(hsaAccount.id);
     const hsaViaPayroll = hsaAccount.hsaViaPayroll !== false;
     const hsaCap = hsaContributionLimit(hsaCoverage, age, yearTable, fixedTables);
-    contributionByAccount[hsaAccount.id] = fundTier(hsaCap, hsaViaPayroll ? ficaRate : 0);
+    contributionByAccount[hsaAccount.id] = trackNetCost(hsaAccount.id, () => fundTier(hsaCap, hsaViaPayroll ? ficaRate : 0));
   }
 
   if (rothIraAccount) {
@@ -202,14 +214,15 @@ function computeContributionWaterfall(p) {
     // Roth IRA: no deduction, no gross-up -- straight dollar-for-dollar against the remaining budget.
     const rothActual = Math.min(Math.max(0, rothCap), remainingBudget);
     contributionByAccount[rothIraAccount.id] = rothActual;
+    netContributionCostByAccount[rothIraAccount.id] = (netContributionCostByAccount[rothIraAccount.id] || 0) + rothActual;
     remainingBudget -= rothActual;
   }
 
   if (employerPlanAccount && electiveRoom > 1e-9) {
-    contributionByAccount[employerPlanAccount.id] += fundEmployerPlan(employerPlanAccount, electiveRoom);
+    contributionByAccount[employerPlanAccount.id] += trackNetCost(employerPlanAccount.id, () => fundEmployerPlan(employerPlanAccount, electiveRoom));
   }
 
-  return { contributionByAccount, employerMatchByAccount, claimedAccountIds, runningBefore };
+  return { contributionByAccount, employerMatchByAccount, netContributionCostByAccount, claimedAccountIds, runningBefore };
 }
 
 /**
@@ -409,6 +422,7 @@ export function projectAccumulation(p) {
         });
         Object.assign(contributionByAccount, wf.contributionByAccount);
         Object.assign(employerMatchByAccount, wf.employerMatchByAccount);
+        Object.assign(netContributionCost, wf.netContributionCostByAccount);
         for (const id of wf.claimedAccountIds) claimedByWaterfall.add(id);
         runningBefore = wf.runningBefore;
       }

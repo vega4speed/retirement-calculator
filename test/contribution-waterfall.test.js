@@ -227,6 +227,31 @@ test('waterfallRole: "none" keeps an unrelated Roth account OUT of the Roth-IRA 
   approx(y.accounts.roth401k.contribution, 15000); // the full waterfall budget, dollar-for-dollar (Roth)
 });
 
+test('totals.netContributionCost adds back up to exactly the waterfall budget, even though gross contributions exceed it', () => {
+  // Real user report: a 15%-of-income budget produced a table showing "16.7%" next to Total
+  // contribution, because the HSA tier's GROSS deposit ($9,013) exceeds its NET take-home cost
+  // (tax deduction + FICA exemption via payroll) -- the 15% budget is a NET figure, but the
+  // dollars landing in accounts are gross. netContributionCost is the net-cost total that should
+  // reconcile back to exactly the budget, and each account's own `netCost` should reconcile too.
+  const r = projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [
+      { id: 'roth401k', balance: 0, taxStatus: 'roth', waterfallRole: 'employerPlan' },
+      { id: 'hsa1', balance: 0, taxStatus: 'hsa', hsaViaPayroll: true },
+    ],
+    returnRate: { default: 0 }, wageGrowth: { default: 0 },
+    income: { default: 156000 }, filingStatus: 'mfj', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0.03 }, standardDeductionIndexingRate: { default: 0.03 },
+    contributionWaterfallEnabled: true, contributionMode: 'percentOfIncome', waterfallBudget: { default: 0.15 },
+    hsaCoverage: 'family',
+  });
+  const y = row(r, 2027);
+  approx(y.totals.netContributionCost, 0.15 * 156000, 1e-6); // reconciles EXACTLY to the net budget
+  assert.ok(y.totals.contribution > y.totals.netContributionCost, 'gross contribution exceeds net cost when a tax-advantaged tier is involved');
+  approx(y.accounts.roth401k.netCost, y.accounts.roth401k.contribution); // Roth: no gross-up, net === gross
+  assert.ok(y.accounts.hsa1.netCost < y.accounts.hsa1.contribution, 'HSA net cost is less than its gross deposit');
+});
+
 test('a non-waterfall account keeps using its own independent contributions setting, in the SAME shared deduction pool', () => {
   const r = projectAccumulation({
     startYear: 2026, endYear: 2027,
