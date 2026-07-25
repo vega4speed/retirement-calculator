@@ -38,6 +38,8 @@ const defaultAssumptions = () => ({
   wageGrowth: { default: 0.03 },
   spending: { default: 40000 },
   otherIncome: { default: 0 },
+  medicalExpenses: { default: 0 },   // out-of-pocket medical in retirement; 0 = feature inert
+  medicalInflation: { default: 0.05 }, // healthcare has historically outpaced general inflation
   withdrawalPercent: { default: 0.04 },
   stateTaxRate: { default: 0 }, // default TN: no state income tax
   earnings: { default: 70000 }, // wage-indexed-equivalent annual $ — see socialsecurity.js
@@ -86,6 +88,8 @@ export async function mount(root) {
     contributionWaterfallEnabled: false, // "standard investment order" -- see engine/project.js's computeContributionWaterfall docs
     matchRate: 1.0,               // waterfall only: fraction of the tier-1 employee contribution matched
     matchCapPercent: 0.04,        // waterfall only: fraction of income eligible for match
+    medicalIncludedInSpending: false, // false: medical is on TOP of the spending target
+    hsaMedicalOnly: false,        // true: HSA is reserved for medical, skipped by ordinary spending
   };
 
   const acctSummary = () => snapshot.accounts.map((a) => ({ id: a.id, label: a.label || a.id }));
@@ -191,6 +195,11 @@ export async function mount(root) {
           lines.push({ text: 'Roth conversions also stop from here on — this plan only converts in the gap years before RMDs.' });
         }
       }
+    }
+    // First year the HSA stops covering the medical bill on its own — the point where medical
+    // starts costing you taxable withdrawals instead of tax-free HSA dollars.
+    if ((row.totals.medicalFromOther || 0) > 1 && (row.totals.medicalFromHsa || 0) > 0) {
+      lines.push({ text: `Your HSA no longer covers medical costs on its own — ${usdShort(row.totals.medicalFromOther)} of this year's bill comes from other accounts (and is taxed on the way out).` });
     }
     for (const [id, a] of Object.entries(row.accounts || {})) {
       if ((a.startBalance || 0) > 1 && (a.endBalance || 0) < 1) {
@@ -314,6 +323,8 @@ export async function mount(root) {
     plan.contributionWaterfallEnabled = false;
     plan.matchRate = 1.0;
     plan.matchCapPercent = 0.04;
+    plan.medicalIncludedInSpending = false;
+    plan.hsaMedicalOnly = false;
     rebuild();
   }
 
@@ -777,6 +788,17 @@ export async function mount(root) {
             ? maxSustainableBox
             : settingRow('spending', 'Annual spending (today’s $)', 'money', false),
         settingRow('otherIncome', "Other income — pension/rental (today's $, not yet taxed — a v1 simplification)", 'money', false),
+        settingRow('medicalExpenses', "Out-of-pocket medical (today's $/yr)", 'money', false),
+        settingRow('medicalInflation', 'Medical inflation', 'percent', false),
+        h('p', { class: 'muted small' }, "Premiums, deductibles, dental/vision, and eventual long-term care — the costs Medicare doesn't cover. These get their OWN inflation rate (healthcare has historically outpaced general inflation), and are paid from your HSA first, tax-free; anything the HSA can't cover is withdrawn like ordinary spending, grossed up for tax. Expand this knob to override specific years — e.g. higher costs before Medicare starts at 65, or a late-life care bump."),
+        checkboxRow('This is already included in my spending target above', plan.medicalIncludedInSpending,
+          (v) => { plan.medicalIncludedInSpending = v; },
+          'Otherwise medical is an additional cost on top of it'),
+        snapshot.accounts.some((a) => a.taxStatus === 'hsa')
+          ? checkboxRow('Reserve my HSA for medical costs only', plan.hsaMedicalOnly,
+              (v) => { plan.hsaMedicalOnly = v; },
+              'Ordinary spending skips the HSA (still a last resort if everything else runs out)')
+          : null,
         selectRow('Withdrawal order', plan.sequencing, [
           ['conventional', 'Conventional (cash → taxable → tax-deferred → HSA → Roth)'],
           ['proportional', 'Proportional (spread across all accounts)'],

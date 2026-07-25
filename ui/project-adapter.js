@@ -37,6 +37,11 @@ function paramsFor(state, taxTables) {
     spending: assumptions.spending,
     otherIncome: assumptions.otherIncome,
     withdrawalPercent: assumptions.withdrawalPercent,
+    // Medical costs: not gated behind tax mode — HSA-first funding is meaningful pre-tax too.
+    medicalExpenses: assumptions.medicalExpenses,
+    medicalInflation: assumptions.medicalInflation,
+    medicalIncludedInSpending: !!plan.medicalIncludedInSpending,
+    hsaMedicalOnly: !!plan.hsaMedicalOnly,
     strategy: plan.strategy,
     sequencing: plan.sequencing,
     bracketFillRate: plan.sequencing === 'bracketFill' ? plan.bracketFillRate : undefined,

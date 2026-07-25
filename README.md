@@ -155,6 +155,20 @@ Total-contribution and Tax figures — so you can see exactly where each year's 
 doing the math by hand. A toggle switches the whole table between nominal dollars and today's
 dollars.
 
+**Health expenses in retirement.** Set an annual out-of-pocket medical figure (premiums,
+deductibles, dental/vision, eventual long-term care — the costs Medicare doesn't cover) with its
+own inflation rate, since healthcare has historically outpaced general inflation. It's an
+additional cost on top of your spending target by default, or you can mark it as already included
+in that target if you budgeted it there. Each year's bill is paid from your HSA first, tax-free;
+whatever the HSA can't cover is withdrawn like ordinary spending and grossed up for the tax it
+triggers. An optional "reserve my HSA for medical costs only" setting keeps ordinary spending from
+draining the account it's meant to fund (it stays a last resort if everything else runs out). The
+projection table gets a Medical column showing each year's cost and how much of it the HSA
+absorbed, an expandable per-year breakdown of exactly how the bill was paid, a note the first year
+the HSA stops covering it on its own, and a lifetime-medical stat tile. Because the medical figure
+is a full override knob, you can also expand it to model specific years — higher costs before
+Medicare starts at 65, or a late-life care bump.
+
 In progress: couple/spousal Social Security (the remaining v1-boundary item).
 
 Known simplifications, documented in the code: state tax is a flat rate (no state brackets);
@@ -178,7 +192,12 @@ employer match ("100% up to 4% of pay") rather than a real multi-tier formula, a
 by type (your first 401(k)/HSA/Roth account) rather than letting you assign specific accounts to
 specific steps; the Roth IRA income phase-out uses your gross income as a stand-in for the real
 MAGI calculation, and the combined employer + employee 401(k) contribution limit (around $70k)
-isn't modeled — only your own employee contribution limit is.
+isn't modeled — only your own employee contribution limit is. Medical costs are modeled in
+retirement only (not during working years), as one annual figure rather than separate
+premium/deductible/long-term-care streams; Medicare Part B/D premiums and their IRMAA
+income-related surcharges aren't modeled specifically, nor is the interaction where a large
+withdrawal raises those premiums two years later; and medical costs never reduce your taxable
+income (the real itemized medical deduction, above 7.5% of AGI, isn't modeled).
 
 > **Note:** `data/tax-tables.json` 2025/2026 figures are verified against IRS Rev. Proc. 2025-32
 > and cross-checked secondary sources (see the file's `_meta`). RMD divisors past age 100 are

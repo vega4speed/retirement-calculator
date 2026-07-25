@@ -35,7 +35,29 @@ engine/               pure calculation modules (unit-tested)
                          contribution docs); hsaContributionLimit() — this year's indexed HSA limit
                          + 55+ catch-up, resolveYearTable()'s output now also carries `hsaLimit`
                          {selfOnly,family}, indexed the same way as the standard deduction)
-  project.js            accumulation + decumulation, tax-aware — DONE (spending, withdrawal
+  project.js            accumulation + decumulation, tax-aware — DONE (medical expenses (2026-07-25):
+                         `medicalExpenses` (setting, today's $/yr) + `medicalInflation` (its own
+                         escalator, own `cumMedicalInflation` accumulator — healthcare outpaces CPI)
+                         + `medicalIncludedInSpending` (on-top of the spending target by default) +
+                         `hsaMedicalOnly`. Funded HSA-FIRST by reusing the EXISTING floors primitive
+                         (the same one RMDs use): a per-HSA-account `medicalFloors` map merged with
+                         `rmdFloors` into `baseFloors` inside solveTaxYear — since HSA withdrawals
+                         are tax-free in taxFor(), the gross-up loop then automatically grosses up
+                         only the SPILLOVER funded from other accounts, no new solver machinery.
+                         `rmdFloors` stays separate solely for the reinvestment-source lookup (only
+                         an RMD's surplus is reinvestment-eligible; a medical floor is spent). The
+                         HSA draw is sized as min(medicalNominal, gap) — netting against SS/other
+                         income BEFORE sizing it is what keeps a floor bigger than the year's target
+                         from tripping the RMD-surplus path and "reinvesting" money actually spent
+                         on care. `hsaMedicalOnly` rides a new `opts.reserveStatuses` on
+                         sequenceWithdrawal: reserved statuses are skipped by the general draw
+                         (which was refactored into one shared `drawInOrder(list, skip)` closure
+                         across all three sequencing modes) but stay a LAST RESORT, same philosophy
+                         as bracketFill's beyond-the-ceiling fallback. Per-year totals:
+                         medicalExpense / medicalFromHsa / medicalFromOther (the residual
+                         `expense - fromHsa - fromOther` is what income covered outright), mirrored
+                         into `real`; project() also returns lifetimeMedical / lifetimeMedicalFromHsa.
+                         (spending, withdrawal
                          strategy, tax-status sequencing, RMD forcing, capital-gains stacking,
                          gross-up, portfolio survival, Social Security income + taxation, and
                          (Phase 6) a 'bracketFill' sequencing mode that draws tax-deferred FIRST
@@ -304,7 +326,8 @@ schemas/              JSON Schemas for profile / snapshot / scenario — scaffol
 test/                 node:test suites (smoke, resolver, accumulation, accumulation-tax,
                        hsa-contributions, contribution-waterfall, decumulation, tax,
                        decumulation-tax, socialsecurity, social-security-decumulation,
-                       bracket-fill, max-sustainable, roth-conversions) — 155 passing.
+                       bracket-fill, max-sustainable, roth-conversions, medical-expenses)
+                       — 173 passing.
 ```
 
 ## Running
@@ -478,6 +501,20 @@ needed. Also fixed: expanding a row used to silently reset the table's horizonta
 back to the left (only vertical scroll was preserved) — `render()` now captures/restores
 `scrollLeft` the same way it already did for `scrollTop`.
 
+**Health expenses in retirement (2026-07-25):** a configurable out-of-pocket medical stream in
+decumulation — see `engine/project.js` above for the mechanism (HSA-first via the existing floors
+primitive, so only the spillover gets grossed up). UI: `assumptions.medicalExpenses` /
+`assumptions.medicalInflation` (both settingRows, household-level) + `plan.medicalIncludedInSpending`
+/ `plan.hsaMedicalOnly` checkboxes in section 4 (the HSA-reserve one shown only when an HSA account
+exists, same pattern as "HSA coverage"), all reset on Clear; `ui/project-adapter.js` passes them
+through NOT gated on taxTables (HSA-first routing is meaningful pre-tax too). Table: a `Medical`
+column (gated `hasMedical`, like hasSS/hasMatch) showing the year's cost with the HSA-funded share
+as a sub-line, a `Medical expenses` section in the consolidated row-detail panel (paid-from
+breakdown: HSA / other accounts / income), a line in the withdrawal section calling out the HSA
+medical draw (replacing the generic "HSA is drawn before Roth" note when medical is in play), a
+"your HSA no longer covers medical costs on its own" transition in `transitionsFor()`, a
+"Lifetime medical costs" stat tile, and two rows in the scenario-comparison table.
+
 **Fixed 2026-07-22 (two small UI bugs):**
 1. Clicking a Tax cell to expand its per-bracket breakdown — or toggling "Show table" — fully
    rebuilds the projection view's DOM, which silently reset the page's scroll position to the
@@ -527,7 +564,11 @@ role/taxStatus (first taxDeferred/hsa/roth) rather than letting you assign speci
 specific tiers — both real, documented scope simplifications, not oversights; Roth IRA MAGI is
 approximated as gross `income` (not a real AGI/MAGI calculation), and the phase-out is linear
 rather than the IRS's own $10-rounded/$200-floor version; the combined employer+employee 401(k)
-contribution limit (~$70k) isn't modeled, only the employee's own elective deferral limit.
+contribution limit (~$70k) isn't modeled, only the employee's own elective deferral limit; medical
+expenses are decumulation-only (no working-years medical) and are ONE annual figure rather than
+separate premium/deductible/LTC streams, Medicare Part B/D premiums + IRMAA surcharges (and the
+two-year lookback that ties them to a big withdrawal) aren't modeled, and medical spending never
+reduces taxable income (no itemized medical deduction above 7.5% of AGI).
 
 > `data/tax-tables.json` 2025/2026 figures are VERIFIED (IRS Rev. Proc. 2025-32 + cross-checked
 > secondary sources, see `_meta`). RMD divisors past age 100 are unverified approximations.

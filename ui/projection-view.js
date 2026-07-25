@@ -269,7 +269,7 @@ const WITHDRAWAL_TAX_STATUS_LABEL = {
 // Per-account withdrawal breakdown (decumulation years), with the RMD floor (and the math behind
 // it) for any tax-deferred account past the required-beginning age, plus a note on why HSA draws
 // before Roth in this app's withdrawal order whenever an HSA withdrawal shows up here.
-function withdrawalSectionContent(breakdown, toDisplay) {
+function withdrawalSectionContent(breakdown, toDisplay, medicalFromHsa = 0) {
   if (!breakdown?.accounts?.length) return h('p', { class: 'muted small' }, 'No withdrawal this year.');
   const table = h('table', { class: 'bracket-mini' },
     h('thead', {}, h('tr', {},
@@ -281,15 +281,46 @@ function withdrawalSectionContent(breakdown, toDisplay) {
       h('td', { class: 'r' }, a.rmdFloor != null ? usdFull(toDisplay(a.rmdFloor)) : '—'),
     ))),
   );
+  const medicalNote = medicalFromHsa > 0.5
+    ? h('p', { class: 'muted small' },
+        `Of the HSA withdrawal, ${usdFull(toDisplay(medicalFromHsa))} paid this year's medical costs (tax-free) — that draw happens first, ahead of the withdrawal order below.`)
+    : null;
   const rmdNote = breakdown.accounts.some((a) => a.rmdFloor != null)
     ? h('p', { class: 'muted small' },
         `RMD required = prior year-end balance ÷ the IRS uniform-lifetime divisor for age ${breakdown.age} (SECURE 2.0's required-beginning-age rule).`)
     : null;
-  const hsaNote = breakdown.accounts.some((a) => a.taxStatus === 'hsa')
+  const hsaNote = breakdown.accounts.some((a) => a.taxStatus === 'hsa') && medicalFromHsa <= 0.5
     ? h('p', { class: 'muted small' },
         "HSA is drawn before Roth in this app's withdrawal order (reserved for medical use), even though both are modeled as tax-free here.")
     : null;
-  return h('div', {}, h('div', { class: 'bracket-detail-wrap' }, table), rmdNote, hsaNote);
+  return h('div', {}, h('div', { class: 'bracket-detail-wrap' }, table), medicalNote, rmdNote, hsaNote);
+}
+
+// How this year's medical bill got paid: HSA first (tax-free), then ordinary withdrawals, with
+// anything income covered outright as the remainder. `medicalExpense - fromHsa - fromOther` is
+// exactly that income-covered part (see engine/project.js's per-year totals).
+function medicalSectionContent(r, toDisplay) {
+  const t = r.totals;
+  if (!(t.medicalExpense > 0.5)) return null;
+  const fromHsa = t.medicalFromHsa || 0;
+  const fromOther = t.medicalFromOther || 0;
+  const fromIncome = Math.max(0, t.medicalExpense - fromHsa - fromOther);
+  const line = (label, amount) => (amount > 0.5
+    ? h('tr', {}, h('td', {}, label), h('td', { class: 'r' }, usdFull(toDisplay(amount))))
+    : null);
+  const table = h('table', { class: 'bracket-mini' },
+    h('thead', {}, h('tr', {}, h('th', {}, 'Paid from'), h('th', { class: 'r' }, 'Amount'))),
+    h('tbody', {},
+      line('HSA (tax-free)', fromHsa),
+      line('Other accounts (withdrawn and taxed)', fromOther),
+      line('Social Security / other income', fromIncome),
+      h('tr', { class: 'muted' }, h('td', {}, 'Total medical cost'), h('td', { class: 'r' }, usdFull(toDisplay(t.medicalExpense)))),
+    ),
+  );
+  const note = fromOther > 0.5
+    ? h('p', { class: 'muted small' }, "The HSA didn't cover the whole bill this year, so the rest came out of your other accounts through the normal withdrawal order — grossed up for the tax it triggers.")
+    : null;
+  return h('div', {}, h('div', { class: 'bracket-detail-wrap' }, table), note);
 }
 
 // The whole-portfolio equation behind this row's Balance column -- pure arithmetic already on
@@ -329,6 +360,7 @@ function buildTable(result, opts = {}) {
   const hasConversion = rows.some((r) => r.totals.conversion);
   const hasMatch = rows.some((r) => r.totals.employerMatch);
   const hasSS = rows.some((r) => r.totals.socialSecurity > 0);
+  const hasMedical = rows.some((r) => r.totals.medicalExpense > 0);
 
   // Pin the expand-toggle/Year/Age columns so they stay in view while scrolling the table
   // horizontally (a long row has 15+ columns) -- fixed pixel widths avoid the left offsets
@@ -371,7 +403,7 @@ function buildTable(result, opts = {}) {
 
   // +1 for the leading expand-toggle column, kept separate from the other conditional columns.
   const colCount = 8 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasSS ? 1 : 0)
-    + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0) + perAccountIds.length;
+    + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0) + (hasMedical ? 1 : 0) + perAccountIds.length;
 
   const bodyRows = [];
   for (const r of rows) {
@@ -397,6 +429,17 @@ function buildTable(result, opts = {}) {
 
     const balanceCell = h('td', { class: 'r' }, usdFull(val(r.totals.endBalance, r)));
 
+    // Medical: the year's total cost, with the HSA-funded share called out underneath — the whole
+    // point of the HSA-first rule is visible only if you can see how much of the bill it absorbed.
+    const medicalCell = !hasMedical ? null
+      : !r.totals.medicalExpense ? h('td', { class: 'r' }, '—')
+      : h('td', { class: 'r' },
+          h('div', {}, usdFull(val(r.totals.medicalExpense, r))),
+          r.totals.medicalFromHsa > 0.5
+            ? h('div', { class: 'muted small' }, `${usdFull(val(r.totals.medicalFromHsa, r))} from HSA`)
+            : null,
+        );
+
     // Every applicable section for this row, assembled into ONE expandable panel rather than the
     // four independently-clickable cells this replaced. Order: transitions (most important
     // context) first, then income composition, then contributions/tax/withdrawal/balance.
@@ -412,8 +455,10 @@ function buildTable(result, opts = {}) {
         ? { title: 'Contributions', content: contributionSectionContent(contributionBreakdownFor(r), toDisplay) } : null,
       hasTax && r.totals.tax > 0.005 && bracketBreakdownFor
         ? { title: 'Tax', content: taxSectionContent(bracketBreakdownFor(r)) } : null,
+      r.totals.medicalExpense > 0.5
+        ? { title: 'Medical expenses', content: medicalSectionContent(r, toDisplay) } : null,
       r.totals.withdrawal > 0.5 && withdrawalBreakdownFor
-        ? { title: 'Withdrawal', content: withdrawalSectionContent(withdrawalBreakdownFor(r), toDisplay) } : null,
+        ? { title: 'Withdrawal', content: withdrawalSectionContent(withdrawalBreakdownFor(r), toDisplay, r.totals.medicalFromHsa || 0) } : null,
       hasBalanceDetail ? { title: 'Balance', content: balanceSectionContent(r, toDisplay) } : null,
     ].filter((sec) => sec?.content);
     const rowHasDetail = sections.length > 0;
@@ -451,6 +496,7 @@ function buildTable(result, opts = {}) {
       contributionCell,
       hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? [usdFull(val(r.totals.employerMatch, r)), pct(r.totals.employerMatch, displayIncome)] : '—') : null,
       ...perAccountCells,
+      medicalCell,
       withdrawalCell,
       taxCell,
       hasTax ? h('td', { class: 'r' }, r.phase === 'decumulation' ? usdFull(val(r.totals.netSpendable, r)) : '—') : null,
@@ -474,6 +520,7 @@ function buildTable(result, opts = {}) {
       h('th', { class: 'r' }, 'Total contribution'),
       hasMatch ? h('th', { class: 'r' }, 'Employer match') : null,
       ...perAccountIds.map((id) => h('th', { class: 'r' }, getAccountLabel(id))),
+      hasMedical ? h('th', { class: 'r' }, 'Medical') : null,
       h('th', { class: 'r' }, 'Withdrawal'),
       hasTax ? h('th', { class: 'r' }, 'Tax') : null,
       hasTax ? h('th', { class: 'r' }, 'Net spendable') : null,
@@ -531,6 +578,7 @@ export function createProjectionView(opts = {}) {
     // WHOLE-PLAN lifetime figures (which now also include working-years tax, Phase 6.5) get their
     // own tile below so neither number silently absorbs the other.
     const { decumulationTax, decumulationEffectiveTaxRate, lifetimeTax, lifetimeEffectiveTaxRate, lifetimeRothConversions: lifetimeConversions } = r;
+    const { lifetimeMedical = 0, lifetimeMedicalFromHsa = 0 } = r;
     const growth = retRow.totals.endBalance - startTotal - contributed;
     const yrs = r.retirementYear - r.baseYear;
 
@@ -550,6 +598,12 @@ export function createProjectionView(opts = {}) {
         decumulationTax > 0 ? statTile('Lifetime effective tax rate', `${(decumulationEffectiveTaxRate * 100).toFixed(1)}%`, 'total tax ÷ total gross income, in retirement') : null,
         lifetimeTax > decumulationTax ? statTile('Total tax, working + retired', usd(lifetimeTax), `${(lifetimeEffectiveTaxRate * 100).toFixed(1)}% effective, your whole plan`) : null,
         lifetimeConversions > 0 ? statTile('Converted to Roth', usd(lifetimeConversions), 'nominal, working + retired years') : null,
+        lifetimeMedical > 0
+          ? statTile('Lifetime medical costs', usd(lifetimeMedical),
+              lifetimeMedicalFromHsa > 0
+                ? `nominal · ${usd(lifetimeMedicalFromHsa)} of it paid tax-free from your HSA`
+                : 'nominal, in retirement')
+          : null,
       ),
       buildChart(r),
       h('div', { class: 'table-toggle' },

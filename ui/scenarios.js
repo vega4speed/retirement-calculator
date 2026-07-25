@@ -165,6 +165,16 @@ function buildComparisonTable(entries) {
       ? [['Converted to Roth (lifetime)', (e) =>
           h('td', { class: 'r' }, e.result.lifetimeRothConversions > 0 ? usdFull(e.result.lifetimeRothConversions) : '—')]]
       : []),
+    // Medical shows up only when some scenario actually models it — and the HSA-funded share is
+    // the number the comparison is usually about ("does reserving the HSA change what I keep?").
+    ...(entries.some((e) => e.result.lifetimeMedical > 0)
+      ? [
+          ['Medical costs (lifetime, nominal)', (e) =>
+            h('td', { class: 'r' }, e.result.lifetimeMedical > 0 ? usdFull(e.result.lifetimeMedical) : '—')],
+          ['...paid tax-free from an HSA', (e) =>
+            h('td', { class: 'r' }, e.result.lifetimeMedicalFromHsa > 0 ? usdFull(e.result.lifetimeMedicalFromHsa) : '—')],
+        ]
+      : []),
     ['Retirement year', (e) => h('td', { class: 'r' }, e.result.retirementYear)],
     ['Withdrawal strategy', (e) => h('td', {}, STRATEGY_LABEL[e.scn.plan?.strategy] ?? e.scn.plan?.strategy ?? '—')],
     ['Withdrawal order', (e) => h('td', {}, SEQUENCING_LABEL[e.scn.plan?.sequencing] ?? e.scn.plan?.sequencing ?? '—')],

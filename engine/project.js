@@ -596,9 +596,11 @@ const CONVENTIONAL_ORDER = ['cash', 'taxable', 'taxDeferred', 'hsa', 'roth'];
  * @param {{id:string, balance:number, taxStatus:string}[]} accounts
  * @param {'conventional'|'proportional'|'bracketFill'} sequencing
  * @param {Record<string,number>} [floors]
- * @param {{taxDeferredCeiling?:number}} [opts] `bracketFill` only: the dollar ceiling on total
- *   tax-deferred withdrawals (floors included) that keeps ordinary income at or under the chosen
- *   bracket's top (see solveTaxYear, which computes this from the tax tables).
+ * @param {{taxDeferredCeiling?:number, reserveStatuses?:string[]}} [opts] `taxDeferredCeiling` is
+ *   `bracketFill` only: the dollar ceiling on total tax-deferred withdrawals (floors included)
+ *   that keeps ordinary income at or under the chosen bracket's top (see solveTaxYear, which
+ *   computes this from the tax tables). `reserveStatuses` holds those tax statuses out of the
+ *   general draw entirely (floors and a last-resort sweep excepted) — see the body.
  * @returns {{withdrawals:Record<string,number>, totalWithdrawn:number, shortfall:number}}
  */
 function sequenceWithdrawal(target, accounts, sequencing, floors = {}, opts = {}) {
@@ -612,16 +614,56 @@ function sequenceWithdrawal(target, accounts, sequencing, floors = {}, opts = {}
     floorsTotal += floor;
   }
 
-  const extraTarget = Math.max(0, target - floorsTotal);
-  if (extraTarget > 0) {
-    const total = accounts.reduce((s, a) => s + remainingBalance[a.id], 0);
+  // Accounts whose taxStatus is RESERVED (opts.reserveStatuses — e.g. an HSA held back for
+  // medical costs, see projectDecumulation's `hsaMedicalOnly`) are skipped by the general pass
+  // below. Their floors still apply (that's how the medical draw itself gets made), and they stay
+  // available as a LAST RESORT once every other bucket is exhausted — same philosophy as
+  // bracketFill's own beyond-the-ceiling fallback: a real remaining need beats a false shortfall.
+  const reserved = new Set(opts.reserveStatuses || []);
+  const pool = accounts.filter((a) => !reserved.has(a.taxStatus));
+
+  let remaining = Math.max(0, target - floorsTotal);
+  // Draw from `list` in conventional tax-status order, skipping any status in `skip`, until
+  // `remaining` is covered. Mutates withdrawals/remainingBalance/remaining.
+  const drawInOrder = (list, skip) => {
+    const byStatus = new Map();
+    for (const a of list) {
+      if (skip && skip.has(a.taxStatus)) continue;
+      if (!byStatus.has(a.taxStatus)) byStatus.set(a.taxStatus, []);
+      byStatus.get(a.taxStatus).push(a);
+    }
+    const order = [...CONVENTIONAL_ORDER, ...[...byStatus.keys()].filter((s) => !CONVENTIONAL_ORDER.includes(s))];
+    for (const status of order) {
+      for (const a of byStatus.get(status) || []) {
+        if (remaining <= 0) break;
+        const take = Math.min(remainingBalance[a.id], remaining);
+        withdrawals[a.id] += take;
+        remaining -= take;
+        remainingBalance[a.id] -= take;
+      }
+      if (remaining <= 0) break;
+    }
+  };
+
+  if (remaining > 0) {
+    const total = pool.reduce((s, a) => s + remainingBalance[a.id], 0);
     if (total > 0) {
       if (sequencing === 'proportional') {
         // share_i = extra * remaining_i/total <= remaining_i whenever extra <= total.
-        if (extraTarget >= total) {
-          for (const a of accounts) withdrawals[a.id] += remainingBalance[a.id];
+        if (remaining >= total) {
+          for (const a of pool) {
+            withdrawals[a.id] += remainingBalance[a.id];
+            remaining -= remainingBalance[a.id];
+            remainingBalance[a.id] = 0;
+          }
         } else {
-          for (const a of accounts) withdrawals[a.id] += extraTarget * (remainingBalance[a.id] / total);
+          const extraTarget = remaining;
+          for (const a of pool) {
+            const take = extraTarget * (remainingBalance[a.id] / total);
+            withdrawals[a.id] += take;
+            remaining -= take;
+            remainingBalance[a.id] -= take;
+          }
         }
       } else if (sequencing === 'bracketFill') {
         // Design doc §5's "fill to the top of a bracket": draw tax-deferred FIRST (not last, as
@@ -631,8 +673,7 @@ function sequenceWithdrawal(target, accounts, sequencing, floors = {}, opts = {}
         // the ceiling doesn't cover of the target falls back to conventional order over the
         // remaining (non-tax-deferred) buckets; if even that runs out, the last resort is more
         // tax-deferred beyond the ceiling — a real remaining need beats reporting a false shortfall.
-        let remaining = extraTarget;
-        const tdAccounts = accounts.filter((a) => a.taxStatus === 'taxDeferred');
+        const tdAccounts = pool.filter((a) => a.taxStatus === 'taxDeferred');
         const tdFloorTotal = tdAccounts.reduce((s, a) => s + withdrawals[a.id], 0);
         let tdCapacity = Math.max(0, num(opts.taxDeferredCeiling) - tdFloorTotal);
         for (const a of tdAccounts) {
@@ -643,49 +684,23 @@ function sequenceWithdrawal(target, accounts, sequencing, floors = {}, opts = {}
           tdCapacity -= take;
           remainingBalance[a.id] -= take;
         }
-        const byStatus = new Map();
-        for (const a of accounts) {
-          if (a.taxStatus === 'taxDeferred') continue;
-          if (!byStatus.has(a.taxStatus)) byStatus.set(a.taxStatus, []);
-          byStatus.get(a.taxStatus).push(a);
-        }
-        const restOrder = CONVENTIONAL_ORDER.filter((s) => s !== 'taxDeferred');
-        const order = [...restOrder, ...[...byStatus.keys()].filter((s) => !restOrder.includes(s))];
-        for (const status of order) {
-          for (const a of byStatus.get(status) || []) {
-            if (remaining <= 0) break;
-            const take = Math.min(remainingBalance[a.id], remaining);
-            withdrawals[a.id] += take;
-            remaining -= take;
-          }
-          if (remaining <= 0) break;
-        }
+        drawInOrder(pool, new Set(['taxDeferred']));
         if (remaining > 0) {
           for (const a of tdAccounts) {
             if (remaining <= 0) break;
             const take = Math.min(remainingBalance[a.id], remaining);
             withdrawals[a.id] += take;
             remaining -= take;
+            remainingBalance[a.id] -= take;
           }
         }
       } else {
-        const byStatus = new Map();
-        for (const a of accounts) {
-          if (!byStatus.has(a.taxStatus)) byStatus.set(a.taxStatus, []);
-          byStatus.get(a.taxStatus).push(a);
-        }
-        const order = [...CONVENTIONAL_ORDER, ...[...byStatus.keys()].filter((s) => !CONVENTIONAL_ORDER.includes(s))];
-        let remaining = extraTarget;
-        for (const status of order) {
-          for (const a of byStatus.get(status) || []) {
-            if (remaining <= 0) break;
-            const take = Math.min(remainingBalance[a.id], remaining);
-            withdrawals[a.id] += take;
-            remaining -= take;
-          }
-          if (remaining <= 0) break;
-        }
+        drawInOrder(pool);
       }
+    }
+    // Last resort: the reserved buckets (see `reserved` above).
+    if (remaining > 1e-9 && reserved.size > 0) {
+      drawInOrder(accounts.filter((a) => reserved.has(a.taxStatus)));
     }
   }
 
@@ -726,6 +741,13 @@ function pickReinvestmentTarget(accounts, fallbackId) {
  * @param {{id:string, balance:number, taxStatus:string, basisFraction?:number}[]} p.accounts
  * @param {'conventional'|'proportional'|'bracketFill'} p.sequencing
  * @param {Record<string,number>} p.rmdFloors
+ * @param {Record<string,number>} [p.medicalFloors] forced HSA withdrawals covering this year's
+ *   medical costs (design doc §8 / medical expenses): mechanically identical to an RMD floor —
+ *   taken first, ahead of sequencing — but tax-free, so the gross-up loop naturally ends up
+ *   grossing up only the SPILLOVER portion funded from other accounts. Kept separate from
+ *   `rmdFloors` because only an RMD's surplus is reinvestment-eligible (a medical floor is spent).
+ * @param {string[]} [p.reserveStatuses] tax statuses held out of the general draw (see
+ *   sequenceWithdrawal) — used to reserve HSA balances for medical costs only.
  * @param {'mfj'|'single'|'hoh'} p.filingStatus
  * @param {number} p.age65Count
  * @param {object} p.yearTable   resolved via tax.resolveYearTable
@@ -749,6 +771,14 @@ function pickReinvestmentTarget(accounts, fallbackId) {
  */
 function solveTaxYear(p) {
   const { accounts, sequencing, rmdFloors, filingStatus, yearTable } = p;
+  // Both kinds of forced withdrawal (RMD, medical-from-HSA) land on different accounts by
+  // construction (taxDeferred vs hsa), so a shallow merge can't collide; summing anyway keeps
+  // that from becoming a silent truncation if that ever stops holding.
+  const baseFloors = { ...rmdFloors };
+  for (const [id, amt] of Object.entries(p.medicalFloors || {})) {
+    baseFloors[id] = (baseFloors[id] || 0) + num(amt);
+  }
+  const reserveStatuses = p.reserveStatuses;
   const stateTaxRate = num(p.stateTaxRate);
   const ssBenefit = num(p.socialSecurityBenefit);
   const stdDeduction = standardDeduction({ filingStatus, age65Count: p.age65Count, yearTable });
@@ -792,7 +822,7 @@ function solveTaxYear(p) {
     let taxDeferredCeiling = 0;
     for (let i = 0; i < 8; i++) {
       taxDeferredCeiling = Math.max(0, bracketFillTop + stdDeduction - taxableSSEstimate);
-      const { withdrawals, totalWithdrawn } = sequenceWithdrawal(grossGuess, accounts, sequencing, floors, { taxDeferredCeiling });
+      const { withdrawals, totalWithdrawn } = sequenceWithdrawal(grossGuess, accounts, sequencing, floors, { taxDeferredCeiling, reserveStatuses });
       const { ordinaryTaxableIncome, gain, taxableSS, tax } = taxFor(withdrawals);
       taxableSSEstimate = taxableSS;
       const netAchieved = totalWithdrawn - tax - divertedAmount;
@@ -807,7 +837,7 @@ function solveTaxYear(p) {
     return { last, exhausted, taxDeferredCeiling };
   }
 
-  let { last, exhausted, taxDeferredCeiling } = grossUp(rmdFloors, 0);
+  let { last, exhausted, taxDeferredCeiling } = grossUp(baseFloors, 0);
 
   // Roth conversions (opt-in, bracketFill only): whatever bracket room the spending withdrawal
   // above DIDN'T use, convert that much more tax-deferred -> Roth, then re-solve so the
@@ -825,11 +855,11 @@ function solveTaxYear(p) {
     if (desired > 1e-9 && targetId) {
       // Force the desired amount out of tax-deferred, on top of whatever spending already forced
       // (RMD floors + the spending withdrawal itself), across accounts in balance order.
-      const conversionFloors = { ...rmdFloors };
+      const conversionFloors = { ...baseFloors };
       let remaining = desired;
       for (const a of tdAccounts) {
         if (remaining <= 0) break;
-        const alreadyFloored = rmdFloors[a.id] || 0;
+        const alreadyFloored = baseFloors[a.id] || 0;
         const alreadyWithdrawn = Math.max(alreadyFloored, last.withdrawals[a.id] || 0);
         const avail = Math.max(0, a.balance - alreadyWithdrawn);
         const take = Math.min(avail, remaining);
@@ -923,6 +953,17 @@ function solveTaxYear(p) {
  * @param {object} [p.spending]  setting, today's-dollars annual target (per year); default 0
  * @param {object} [p.otherIncome] setting, today's-dollars annual amount (per year); default 0
  * @param {object} [p.withdrawalPercent] setting (per year); default 0.04
+ * @param {object} [p.medicalExpenses] setting, today's-dollars annual out-of-pocket medical cost
+ *   (per year); default 0 ⇒ the whole medical feature is inert. Full resolver support, so a
+ *   `byYear` override covers "Medicare starts at 65", a late-life long-term-care bump, etc.
+ * @param {object} [p.medicalInflation] setting (per year); medical costs get their OWN cumulative
+ *   escalator (healthcare historically outpaces CPI); omit to reuse `inflation`
+ * @param {boolean} [p.medicalIncludedInSpending] true ⇒ the medical figure is assumed to already
+ *   sit inside `spending`, so it changes only the FUNDING SOURCE (HSA first), not the year's total
+ *   need. false (default) ⇒ medical is an ADDITIONAL need on top of the spending target.
+ * @param {boolean} [p.hsaMedicalOnly] true ⇒ HSA balances are reserved for medical costs and are
+ *   skipped by ordinary spending sequencing (still a last resort once all else is exhausted).
+ *   Default false — HSA keeps its conventional-order slot, i.e. existing plans are unchanged.
  * @param {'fixedReal'|'fixedPercent'} [p.strategy] default 'fixedReal'
  * @param {'conventional'|'proportional'|'bracketFill'} [p.sequencing] default 'conventional'.
  *   `bracketFill` requires tax mode (below) — it needs real brackets to fill.
@@ -971,6 +1012,9 @@ export function projectDecumulation(p) {
   const spending = p.spending ?? { default: 0 };
   const otherIncome = p.otherIncome ?? { default: 0 };
   const withdrawalPercent = p.withdrawalPercent ?? { default: 0.04 };
+  const medicalExpenses = p.medicalExpenses ?? { default: 0 };
+  const medicalInflation = p.medicalInflation ?? inflation;
+  const reserveStatuses = p.hsaMedicalOnly ? ['hsa'] : undefined;
   const strategy = p.strategy ?? 'fixedReal';
   const sequencing = p.sequencing ?? 'conventional';
   const taxMode = !!(p.filingStatus && p.taxTables);
@@ -990,6 +1034,9 @@ export function projectDecumulation(p) {
 
   const years = [];
   let cumInflation = num(p.startCumulativeInflation) || 1;
+  // Medical costs compound on their own escalator (see p.medicalInflation), seeded from the same
+  // starting point as general inflation so both stay relative to the plan's one base year.
+  let cumMedicalInflation = num(p.startCumulativeInflation) || 1;
   // Relative to the claiming year; starts compounding the year AFTER claiming. If claiming
   // happened BEFORE this function's startYear (e.g. claimed while still in the accumulation
   // phase, which projectDecumulation never iterates), seed cumCOLA for the skipped years so the
@@ -1002,6 +1049,7 @@ export function projectDecumulation(p) {
 
   for (let year = startYear; year <= endYear; year++) {
     cumInflation *= 1 + num(resolve(inflation, { year }));
+    cumMedicalInflation *= 1 + num(resolve(medicalInflation, { year }));
 
     let ssBenefitNominal = 0;
     if (ssClaimingYear != null && year >= ssClaimingYear) {
@@ -1015,9 +1063,36 @@ export function projectDecumulation(p) {
       ? startTotal * num(resolve(withdrawalPercent, { year }))
       : num(resolve(spending, { year })) * cumInflation;
     const otherIncomeNominal = num(resolve(otherIncome, { year })) * cumInflation;
-    const gap = Math.max(0, desired - otherIncomeNominal - ssBenefitNominal);
+    // Medical costs: an additional need on top of the spending target by default, or (when
+    // medicalIncludedInSpending) already inside it — in which case only the funding source below
+    // changes, never the year's total need.
+    const medicalNominal = Math.max(0, num(resolve(medicalExpenses, { year })) * cumMedicalInflation);
+    const totalNeed = desired + (p.medicalIncludedInSpending ? 0 : medicalNominal);
+    const gap = Math.max(0, totalNeed - otherIncomeNominal - ssBenefitNominal);
 
     const seqAccounts = accounts.map((a) => ({ id: a.id, balance: bal[a.id], taxStatus: taxStatus[a.id], basisFraction: basisFraction[a.id] }));
+
+    // Fund medical from the HSA FIRST (tax-free), then let the ordinary sequencing cover whatever
+    // spilled over. Netting against income BEFORE sizing the HSA draw matters: if Social Security
+    // and other income already cover the year outright there's nothing to withdraw at all, and an
+    // HSA floor bigger than the year's target would otherwise trip solveTaxYear's surplus path
+    // (which exists for RMDs) and "reinvest" money that was actually spent on care.
+    const medicalFromPortfolio = Math.min(medicalNominal, gap);
+    const medicalFloors = {};
+    let medicalFromHsa = 0;
+    let medicalRemaining = medicalFromPortfolio;
+    for (const a of seqAccounts) {
+      if (medicalRemaining <= 1e-9) break;
+      if (a.taxStatus !== 'hsa') continue;
+      const take = Math.min(Math.max(0, a.balance), medicalRemaining);
+      if (take <= 0) continue;
+      medicalFloors[a.id] = take;
+      medicalFromHsa += take;
+      medicalRemaining -= take;
+    }
+    // What the HSA couldn't cover is funded like any other spending: normal sequencing, and (in
+    // tax mode) grossed up so the NET covers the bill.
+    const medicalFromOther = Math.max(0, medicalFromPortfolio - medicalFromHsa);
 
     let withdrawals, reinvestment, conversions, shortfall, tax = 0, ordinaryTaxableIncome = 0, capitalGain = 0, taxableSS = 0;
     if (taxMode) {
@@ -1039,6 +1114,7 @@ export function projectDecumulation(p) {
       });
       const solved = solveTaxYear({
         targetNet: gap, accounts: seqAccounts, sequencing, rmdFloors,
+        medicalFloors, reserveStatuses,
         filingStatus: p.filingStatus, age65Count: age != null && age >= 65 ? 1 : 0,
         yearTable, stateTaxRate: p.stateTaxRate,
         socialSecurityBenefit: ssBenefitNominal, fixedTables: p.taxTables.fixed,
@@ -1050,7 +1126,7 @@ export function projectDecumulation(p) {
       tax = solved.tax; ordinaryTaxableIncome = solved.ordinaryTaxableIncome; capitalGain = solved.capitalGain;
       taxableSS = solved.taxableSocialSecurity;
     } else {
-      const seq = sequenceWithdrawal(gap, seqAccounts, sequencing);
+      const seq = sequenceWithdrawal(gap, seqAccounts, sequencing, medicalFloors, { reserveStatuses });
       withdrawals = seq.withdrawals; shortfall = seq.shortfall;
       reinvestment = Object.fromEntries(accounts.map((a) => [a.id, 0]));
       conversions = Object.fromEntries(accounts.map((a) => [a.id, 0]));
@@ -1071,6 +1147,11 @@ export function projectDecumulation(p) {
     }
     const totals = rowTotals(acc, ['withdrawal', 'reinvestment', 'conversion']);
     totals.spendingNeed = desired;
+    // Medical: the full cost, and how it got funded. `medicalExpense - medicalFromHsa -
+    // medicalFromOther` is the part income (SS/otherIncome) covered outright — no withdrawal at all.
+    totals.medicalExpense = medicalNominal;
+    totals.medicalFromHsa = medicalFromHsa;
+    totals.medicalFromOther = medicalFromOther;
     totals.otherIncome = otherIncomeNominal;
     totals.socialSecurity = ssBenefitNominal;
     totals.taxableSocialSecurity = taxableSS;
@@ -1102,6 +1183,9 @@ export function projectDecumulation(p) {
       real: {
         endBalance: totals.endBalance / cumInflation,
         spendingNeed: totals.spendingNeed / cumInflation,
+        medicalExpense: totals.medicalExpense / cumInflation,
+        medicalFromHsa: totals.medicalFromHsa / cumInflation,
+        medicalFromOther: totals.medicalFromOther / cumInflation,
         otherIncome: totals.otherIncome / cumInflation,
         socialSecurity: totals.socialSecurity / cumInflation,
         withdrawal: totals.withdrawal / cumInflation,
@@ -1149,6 +1233,10 @@ export function projectDecumulation(p) {
  * @param {object} [p.spending]       decumulation only
  * @param {object} [p.otherIncome]    decumulation only
  * @param {object} [p.withdrawalPercent] decumulation only
+ * @param {object} [p.medicalExpenses] decumulation only — see projectDecumulation's docs
+ * @param {object} [p.medicalInflation] decumulation only; defaults to `inflation`
+ * @param {boolean} [p.medicalIncludedInSpending] decumulation only; default false
+ * @param {boolean} [p.hsaMedicalOnly] decumulation only; default false
  * @param {'fixedReal'|'fixedPercent'} [p.strategy] decumulation only
  * @param {'conventional'|'proportional'|'bracketFill'} [p.sequencing] decumulation only
  * @param {number} [p.bracketFillRate] `sequencing==='bracketFill'` only (Phase 6, design doc §5)
@@ -1236,6 +1324,8 @@ export function project(p) {
       startYear: retirementYear + 1, endYear: horizonYear, accounts: decStartAccounts,
       returnRate: p.returnRate, inflation: p.inflation,
       spending: p.spending, otherIncome: p.otherIncome, withdrawalPercent: p.withdrawalPercent,
+      medicalExpenses: p.medicalExpenses, medicalInflation: p.medicalInflation,
+      medicalIncludedInSpending: p.medicalIncludedInSpending, hsaMedicalOnly: p.hsaMedicalOnly,
       strategy: p.strategy, sequencing: p.sequencing, bracketFillRate: p.bracketFillRate,
       rothConversionsEnabled: p.rothConversionsEnabled,
       startCumulativeInflation: lastAccRow.cumulativeInflation,
@@ -1275,11 +1365,16 @@ export function project(p) {
   const decumulationTax = decYearsOnly.reduce((s, y) => s + (y.totals.tax || 0), 0);
   const decumulationGrossIncome = decYearsOnly.reduce((s, y) => s + (y.totals.grossIncome || 0), 0);
   const decumulationEffectiveTaxRate = decumulationGrossIncome > 0 ? decumulationTax / decumulationGrossIncome : 0;
+  // Medical costs are decumulation-only today (working-years medical isn't modeled), so these
+  // sums are over the same rows either way.
+  const lifetimeMedical = years.reduce((s, y) => s + (y.totals.medicalExpense || 0), 0);
+  const lifetimeMedicalFromHsa = years.reduce((s, y) => s + (y.totals.medicalFromHsa || 0), 0);
 
   return {
     baseYear, retirementYear, horizonYear, years, firstDepletionYear,
     lifetimeTax, lifetimeGrossIncome, lifetimeEffectiveTaxRate, lifetimeRothConversions,
     decumulationTax, decumulationGrossIncome, decumulationEffectiveTaxRate,
+    lifetimeMedical, lifetimeMedicalFromHsa,
   };
 }
 
