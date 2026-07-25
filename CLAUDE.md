@@ -458,6 +458,26 @@ same value `project.js`'s own internal RMD forcing already uses (confirmed by re
 not assumed), so the displayed math always matches what the engine actually did — no
 previous-row lookup or new engine field needed either.
 
+**Consolidated into one panel per row, plus transitions + Social Security column (2026-07-25,
+same session):** the four independent per-column toggles above were the wrong shape — a user
+wants everything about a row in one place, not four things to separately discover and click. The
+expand state collapsed from `expandedCells: Set<'${year}:${column}'>` down to
+`expandedYears: Set<number>` (one flag per ROW), with a single new leftmost toggle column
+replacing the four clickable cells (Tax/Contribution/Withdrawal/Balance are plain text again).
+`rowDetailRow()` in `ui/projection-view.js` assembles whichever sections apply (transitions,
+income composition, contributions, tax, withdrawal, balance) into ONE `<tr>`, in that fixed order
+— the four section-renderer functions were refactored to return inner content only, reused
+as-is. New: a **Social Security** column (`hasSS`, gated like `hasMatch`) right next to Income, so
+the composition (Income = SS + Withdrawal + other) is visible without expanding anything — SS was
+already included in `totals.grossIncome`, just never surfaced on its own. New:
+`transitionsFor(row, retirementYear)` in `ui/app.js`, a plain-language narration engine (retirement
+begins, Social Security begins, RMDs begin — with a note that Roth conversions stop the same year
+under bracket-fill sequencing, an account fully depletes, a shortfall occurs) — every check uses
+only the CURRENT row's own data plus static plan/filing/social config, no previous-row lookup
+needed. Also fixed: expanding a row used to silently reset the table's horizontal scroll position
+back to the left (only vertical scroll was preserved) — `render()` now captures/restores
+`scrollLeft` the same way it already did for `scrollTop`.
+
 **Fixed 2026-07-22 (two small UI bugs):**
 1. Clicking a Tax cell to expand its per-bracket breakdown — or toggling "Show table" — fully
    rebuilds the projection view's DOM, which silently reset the page's scroll position to the

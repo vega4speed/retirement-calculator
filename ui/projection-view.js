@@ -164,7 +164,33 @@ function buildChart(result) {
   return h('div', {}, legend, wrap);
 }
 
-function bracketDetailRow(colspan, breakdown) {
+// Renders one titled sub-section of the consolidated row-detail panel (see rowDetailRow below).
+// `title` is null for the transitions section, which reads better with no heading.
+function detailSection(title, content) {
+  if (!content) return null;
+  return h('div', { class: 'bracket-section' }, title ? h('h5', {}, title) : null, content);
+}
+
+function transitionsContent(lines) {
+  if (!lines?.length) return null;
+  return h('div', { class: 'transitions' },
+    ...lines.map((t) => h('p', { class: t.tone === 'critical' ? 'critical small' : 'small' }, t.text)));
+}
+
+// Decumulation only: spells out Income = Social Security + Withdrawn (+ other income) -- the
+// Income/Social Security/Withdrawal columns already show these side by side, this just states
+// the identity explicitly for anyone not used to cross-referencing three columns themselves.
+function incomeCompositionContent(r, toDisplay) {
+  if (r.phase !== 'decumulation' || !(r.totals.grossIncome > 0)) return null;
+  const terms = [];
+  if (r.totals.socialSecurity) terms.push(`${usdFull(toDisplay(r.totals.socialSecurity))} Social Security`);
+  if (r.totals.withdrawal) terms.push(`${usdFull(toDisplay(r.totals.withdrawal))} withdrawn from savings`);
+  if (r.totals.otherIncome) terms.push(`${usdFull(toDisplay(r.totals.otherIncome))} other income`);
+  if (!terms.length) return null;
+  return h('p', { class: 'small' }, `${usdFull(toDisplay(r.totals.grossIncome))} income = ${terms.join(' + ')}`);
+}
+
+function taxSectionContent(breakdown) {
   const stdDeductionRow = breakdown?.stdDeduction > 0
     ? h('tr', { class: 'muted' },
         h('td', {}, 'std. deduction'),
@@ -206,19 +232,14 @@ function bracketDetailRow(colspan, breakdown) {
     ? h('p', { class: 'muted small' },
         `Of this, ${usdFull(breakdown.taxOnConversion)} is tax on the ${usdFull(breakdown.conversionAmount)} Roth conversion; the remaining ${usdFull((breakdown.ordinary?.reduce((s, row) => s + row.tax, 0) || 0) - breakdown.taxOnConversion)} is tax on regular income.`)
     : null;
-  return h('tr', { class: 'bracket-detail' }, h('td', { colspan },
-    (ordinary || ltcg)
-      ? h('div', {}, h('div', { class: 'bracket-detail-wrap' }, ordinary, ltcg), rateCompare, conversionSplit)
-      : h('p', { class: 'muted small' }, 'No taxable income this year.'),
-  ));
+  if (!ordinary && !ltcg) return h('p', { class: 'muted small' }, 'No taxable income this year.');
+  return h('div', {}, h('div', { class: 'bracket-detail-wrap' }, ordinary, ltcg), rateCompare, conversionSplit);
 }
 
-// Per-account gross/tax-saved/FICA-saved/net-cost table for a clicked "Total contribution" cell
-// (accumulation years). `toDisplay` applies the table's own nominal/today's-$ mode toggle.
-function contributionDetailRow(colspan, breakdown, toDisplay) {
-  if (!breakdown?.accounts?.length) {
-    return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('p', { class: 'muted small' }, 'No contributions this year.')));
-  }
+// Per-account gross/tax-saved/FICA-saved/net-cost table (accumulation years). `toDisplay` applies
+// the table's own nominal/today's-$ mode toggle.
+function contributionSectionContent(breakdown, toDisplay) {
+  if (!breakdown?.accounts?.length) return h('p', { class: 'muted small' }, 'No contributions this year.');
   const totalTaxSaved = breakdown.accounts.reduce((s, a) => s + a.taxSaved, 0);
   const totalFicaSaved = breakdown.accounts.reduce((s, a) => s + a.ficaSaved, 0);
   const table = h('table', { class: 'bracket-mini' },
@@ -238,19 +259,18 @@ function contributionDetailRow(colspan, breakdown, toDisplay) {
     : '';
   const summary = h('p', { class: 'muted small' },
     `${usdFull(toDisplay(breakdown.totalGross))} gross across these accounts cost ${usdFull(toDisplay(breakdown.totalNetCost))} out of your paycheck${savedNote}.`);
-  return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('div', {}, h('div', { class: 'bracket-detail-wrap' }, table), summary)));
+  return h('div', {}, h('div', { class: 'bracket-detail-wrap' }, table), summary);
 }
 
 const WITHDRAWAL_TAX_STATUS_LABEL = {
   taxDeferred: 'Tax-deferred', roth: 'Roth', taxable: 'Taxable / brokerage', hsa: 'HSA', cash: 'Cash / savings',
 };
 
-// Per-account withdrawal breakdown for a clicked "Withdrawal" cell (decumulation years), with the
-// RMD floor (and the math behind it) for any tax-deferred account past the required-beginning age.
-function withdrawalDetailRow(colspan, breakdown, toDisplay) {
-  if (!breakdown?.accounts?.length) {
-    return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('p', { class: 'muted small' }, 'No withdrawal this year.')));
-  }
+// Per-account withdrawal breakdown (decumulation years), with the RMD floor (and the math behind
+// it) for any tax-deferred account past the required-beginning age, plus a note on why HSA draws
+// before Roth in this app's withdrawal order whenever an HSA withdrawal shows up here.
+function withdrawalSectionContent(breakdown, toDisplay) {
+  if (!breakdown?.accounts?.length) return h('p', { class: 'muted small' }, 'No withdrawal this year.');
   const table = h('table', { class: 'bracket-mini' },
     h('thead', {}, h('tr', {},
       h('th', {}, 'Account'), h('th', {}, 'Type'), h('th', { class: 'r' }, 'Withdrawn'), h('th', { class: 'r' }, 'RMD required'))),
@@ -265,12 +285,16 @@ function withdrawalDetailRow(colspan, breakdown, toDisplay) {
     ? h('p', { class: 'muted small' },
         `RMD required = prior year-end balance ÷ the IRS uniform-lifetime divisor for age ${breakdown.age} (SECURE 2.0's required-beginning-age rule).`)
     : null;
-  return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('div', {}, h('div', { class: 'bracket-detail-wrap' }, table), rmdNote)));
+  const hsaNote = breakdown.accounts.some((a) => a.taxStatus === 'hsa')
+    ? h('p', { class: 'muted small' },
+        "HSA is drawn before Roth in this app's withdrawal order (reserved for medical use), even though both are modeled as tax-free here.")
+    : null;
+  return h('div', {}, h('div', { class: 'bracket-detail-wrap' }, table), rmdNote, hsaNote);
 }
 
 // The whole-portfolio equation behind this row's Balance column -- pure arithmetic already on
 // `r.totals` (matches rowTotals()'s own identity in engine/project.js exactly), no extra data.
-function balanceDetailRow(colspan, r, toDisplay) {
+function balanceSectionContent(r, toDisplay) {
   const t = r.totals;
   const parts = [`Start ${usdFull(toDisplay(t.startBalance))}`];
   if (r.phase === 'decumulation') {
@@ -285,7 +309,17 @@ function balanceDetailRow(colspan, r, toDisplay) {
     if (t.conversion) parts.push(`(${usdFull(toDisplay(t.conversion))} converted to Roth this year, moved within your own accounts -- nets to $0 across all accounts)`);
   }
   parts.push(`= End ${usdFull(toDisplay(t.endBalance))}`);
-  return h('tr', { class: 'bracket-detail' }, h('td', { colspan }, h('p', { class: 'muted small' }, parts.join('  '))));
+  return h('p', { class: 'muted small' }, parts.join('  '));
+}
+
+// Assembles whichever sections apply into ONE detail row per expanded year -- replaces what used
+// to be up to four independent `<tr>`s (one per clickable column). `sections` is an array of
+// {title, content} (title null for the transitions section, which reads better unheaded) --
+// already-filtered to non-null by the caller.
+function rowDetailRow(colspan, sections) {
+  if (!sections.length) return null;
+  return h('tr', { class: 'bracket-detail' }, h('td', { colspan },
+    h('div', { class: 'row-detail' }, ...sections.map((sec) => detailSection(sec.title, sec.content)))));
 }
 
 function buildTable(result, opts = {}) {
@@ -294,8 +328,12 @@ function buildTable(result, opts = {}) {
   const hasAge = rows.some((r) => r.age != null);
   const hasConversion = rows.some((r) => r.totals.conversion);
   const hasMatch = rows.some((r) => r.totals.employerMatch);
-  const { expandedCells, onToggleExpand, bracketBreakdownFor, contributionBreakdownFor, withdrawalBreakdownFor } = opts;
-  const isExpanded = (year, col) => expandedCells.has(`${year}:${col}`);
+  const hasSS = rows.some((r) => r.totals.socialSecurity > 0);
+  const {
+    expandedYears, onToggleExpand, bracketBreakdownFor, contributionBreakdownFor,
+    withdrawalBreakdownFor, transitionsFor,
+  } = opts;
+  const isExpanded = (year) => expandedYears.has(year);
   const getAccountLabel = opts.getAccountLabel || ((id) => id);
   const mode = opts.mode === 'real' ? 'real' : 'nominal'; // 'nominal' | 'real' (today's $)
 
@@ -315,7 +353,9 @@ function buildTable(result, opts = {}) {
   const accumRows = rows.filter((r) => r.phase !== 'decumulation');
   const perAccountIds = accumRows.length ? Object.keys(accumRows[0].accounts) : [];
 
-  const colCount = 7 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0) + perAccountIds.length;
+  // +1 for the leading expand-toggle column, kept separate from the other conditional columns.
+  const colCount = 8 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasSS ? 1 : 0)
+    + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0) + perAccountIds.length;
 
   const bodyRows = [];
   for (const r of rows) {
@@ -328,36 +368,42 @@ function buildTable(result, opts = {}) {
     const displayIncome = r.phase === 'decumulation' ? (r.totals.grossIncome || 0) : (r.totals.income || 0);
     const taxIncome = r.totals.grossIncome || 0; // effectiveTaxRate's own denominator — tax legitimately falls on the conversion too
     const toDisplay = (v) => val(v, r);
-    const clickableTax = hasTax && bracketBreakdownFor && r.totals.tax > 0.005;
+
     const taxCell = !hasTax ? null
       : !r.totals.tax ? h('td', { class: 'r' }, '—')
-      : clickableTax
-        ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year, 'tax') },
-            usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome), ' ', isExpanded(r.year, 'tax') ? '▾' : '▸'))
-        : h('td', { class: 'r' }, usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome));
+      : h('td', { class: 'r' }, usdFull(val(r.totals.tax, r)), pct(r.totals.tax, taxIncome));
 
-    const clickableContribution = contributionBreakdownFor && r.totals.contribution > 0.5;
     const contributionCell = !r.totals.contribution ? h('td', { class: 'r' }, '—')
-      : clickableContribution
-        ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year, 'contribution') },
-            usdFull(val(r.totals.contribution, r)), pct(r.totals.netContributionCost ?? r.totals.contribution, displayIncome), ' ', isExpanded(r.year, 'contribution') ? '▾' : '▸'))
-        : h('td', { class: 'r' }, usdFull(val(r.totals.contribution, r)), pct(r.totals.netContributionCost ?? r.totals.contribution, displayIncome));
+      : h('td', { class: 'r' }, usdFull(val(r.totals.contribution, r)), pct(r.totals.netContributionCost ?? r.totals.contribution, displayIncome));
 
-    const clickableWithdrawal = withdrawalBreakdownFor && r.totals.withdrawal > 0.5;
     const withdrawalCell = !r.totals.withdrawal ? h('td', { class: 'r' }, '—')
-      : clickableWithdrawal
-        ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year, 'withdrawal') },
-            usdFull(val(r.totals.withdrawal, r)), ' ', isExpanded(r.year, 'withdrawal') ? '▾' : '▸'))
-        : h('td', { class: 'r' }, usdFull(val(r.totals.withdrawal, r)));
+      : h('td', { class: 'r' }, usdFull(val(r.totals.withdrawal, r)));
 
-    // The Balance equation is pure arithmetic already on the row -- no external data needed, so
-    // it's clickable whenever there's actually something to explain (skips the inert baseline row).
+    const balanceCell = h('td', { class: 'r' }, usdFull(val(r.totals.endBalance, r)));
+
+    // Every applicable section for this row, assembled into ONE expandable panel rather than the
+    // four independently-clickable cells this replaced. Order: transitions (most important
+    // context) first, then income composition, then contributions/tax/withdrawal/balance.
+    // The Balance equation is only worth showing when something actually happened this year
+    // (skips the inert baseline row).
     const hasBalanceDetail = !!(r.totals.growth || r.totals.contribution || r.totals.employerMatch
       || r.totals.withdrawal || r.totals.conversion || r.totals.reinvestment);
-    const balanceCell = hasBalanceDetail
-      ? h('td', { class: 'r' }, h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year, 'balance') },
-          usdFull(val(r.totals.endBalance, r)), ' ', isExpanded(r.year, 'balance') ? '▾' : '▸'))
-      : h('td', { class: 'r' }, usdFull(val(r.totals.endBalance, r)));
+
+    const sections = [
+      transitionsFor ? { title: null, content: transitionsContent(transitionsFor(r, result.retirementYear)) } : null,
+      { title: 'Income', content: incomeCompositionContent(r, toDisplay) },
+      r.totals.contribution > 0.5 && contributionBreakdownFor
+        ? { title: 'Contributions', content: contributionSectionContent(contributionBreakdownFor(r), toDisplay) } : null,
+      hasTax && r.totals.tax > 0.005 && bracketBreakdownFor
+        ? { title: 'Tax', content: taxSectionContent(bracketBreakdownFor(r)) } : null,
+      r.totals.withdrawal > 0.5 && withdrawalBreakdownFor
+        ? { title: 'Withdrawal', content: withdrawalSectionContent(withdrawalBreakdownFor(r), toDisplay) } : null,
+      hasBalanceDetail ? { title: 'Balance', content: balanceSectionContent(r, toDisplay) } : null,
+    ].filter((sec) => sec?.content);
+    const rowHasDetail = sections.length > 0;
+    const toggleCell = h('td', {}, rowHasDetail
+      ? h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year) }, isExpanded(r.year) ? '▾' : '▸')
+      : null);
 
     // %-of-income annotations reflect NET take-home cost, not the gross dollars landing in the
     // account, whenever the two differ (a Traditional/HSA account's tax deduction + any FICA
@@ -380,10 +426,12 @@ function buildTable(result, opts = {}) {
     });
 
     bodyRows.push(h('tr', {},
+      toggleCell,
       h('td', {}, r.year),
       h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       hasAge ? h('td', { class: 'r' }, r.age ?? '—') : null,
       hasTax ? h('td', { class: 'r' }, displayIncome ? usdFull(val(displayIncome, r)) : '—') : null,
+      hasSS ? h('td', { class: 'r' }, r.totals.socialSecurity ? usdFull(val(r.totals.socialSecurity, r)) : '—') : null,
       contributionCell,
       hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? [usdFull(val(r.totals.employerMatch, r)), pct(r.totals.employerMatch, displayIncome)] : '—') : null,
       ...perAccountCells,
@@ -394,25 +442,17 @@ function buildTable(result, opts = {}) {
       h('td', { class: 'r' }, usdFull(val(r.totals.growth, r))),
       balanceCell,
     ));
-    if (clickableContribution && isExpanded(r.year, 'contribution')) {
-      bodyRows.push(contributionDetailRow(colCount, contributionBreakdownFor(r), toDisplay));
-    }
-    if (clickableTax && isExpanded(r.year, 'tax')) {
-      bodyRows.push(bracketDetailRow(colCount, bracketBreakdownFor(r)));
-    }
-    if (clickableWithdrawal && isExpanded(r.year, 'withdrawal')) {
-      bodyRows.push(withdrawalDetailRow(colCount, withdrawalBreakdownFor(r), toDisplay));
-    }
-    if (hasBalanceDetail && isExpanded(r.year, 'balance')) {
-      bodyRows.push(balanceDetailRow(colCount, r, toDisplay));
+    if (rowHasDetail && isExpanded(r.year)) {
+      bodyRows.push(rowDetailRow(colCount, sections));
     }
   }
 
   const table = h('table', { class: 'proj-table' },
     h('thead', {}, h('tr', {},
-      h('th', {}, 'Year'), h('th', {}, 'Phase'),
+      h('th', {}, ''), h('th', {}, 'Year'), h('th', {}, 'Phase'),
       hasAge ? h('th', { class: 'r' }, 'Age') : null,
       hasTax ? h('th', { class: 'r' }, 'Income') : null,
+      hasSS ? h('th', { class: 'r' }, 'Social Security') : null,
       h('th', { class: 'r' }, 'Total contribution'),
       hasMatch ? h('th', { class: 'r' }, 'Employer match') : null,
       ...perAccountIds.map((id) => h('th', { class: 'r' }, getAccountLabel(id))),
@@ -432,12 +472,14 @@ export function createProjectionView(opts = {}) {
   const bracketBreakdownFor = opts.bracketBreakdownFor;
   const contributionBreakdownFor = opts.contributionBreakdownFor;
   const withdrawalBreakdownFor = opts.withdrawalBreakdownFor;
+  const transitionsFor = opts.transitionsFor;
   const getAccountLabel = opts.getAccountLabel || ((id) => id);
   let showTable = false;
-  // Keys are `${year}:${column}` (column: 'tax'|'contribution'|'withdrawal'|'balance') -- a Set
-  // rather than a single scalar so multiple expansions (even in the same row) can be open at once,
-  // unlike the single-Tax-cell `expandedYear` this replaced.
-  let expandedCells = new Set();
+  // One flag per YEAR, not per column -- a Set (rather than a single scalar) so more than one
+  // row's panel can be open at once, but each row now has exactly one combined panel covering
+  // everything applicable (transitions, income, contributions, tax, withdrawal, balance) instead
+  // of four independently-toggleable cells.
+  let expandedYears = new Set();
   let current = null;
   let tableMode = 'nominal'; // 'nominal' | 'real' -- see buildTable's docs
 
@@ -449,10 +491,13 @@ export function createProjectionView(opts = {}) {
     // separate scroll positions matter here: the page's own scroll, AND the table's internal
     // scroll (.table-scroll has its own max-height + overflow so long tables don't blow out the
     // page) — the table gets torn down and rebuilt as a brand-new element, so its scrollTop
-    // resets to 0 unless captured from the OLD element and reapplied to the NEW one.
+    // resets to 0 unless captured from the OLD element and reapplied to the NEW one. scrollLeft
+    // needs the SAME treatment -- expanding a row used to silently snap the table back to its
+    // leftmost columns, discarding wherever you'd scrolled to review a rightward column.
     const scrollY = window.scrollY;
     const prevTableScroll = el.querySelector('.table-scroll');
     const tableScrollTop = prevTableScroll ? prevTableScroll.scrollTop : 0;
+    const tableScrollLeft = prevTableScroll ? prevTableScroll.scrollLeft : 0;
     clear(el);
     if (!current) { el.append(h('p', { class: 'muted' }, 'Add at least one account to see a projection.')); window.scrollTo(0, scrollY); return; }
     const r = current;
@@ -499,22 +544,22 @@ export function createProjectionView(opts = {}) {
     ];
     if (showTable) {
       parts.push(buildTable(r, {
-        expandedCells,
+        expandedYears,
         bracketBreakdownFor,
         contributionBreakdownFor,
         withdrawalBreakdownFor,
+        transitionsFor,
         getAccountLabel,
         mode: tableMode,
-        onToggleExpand: (year, column) => {
-          const key = `${year}:${column}`;
-          if (expandedCells.has(key)) expandedCells.delete(key); else expandedCells.add(key);
+        onToggleExpand: (year) => {
+          if (expandedYears.has(year)) expandedYears.delete(year); else expandedYears.add(year);
           render();
         },
       }));
     }
     el.append(...parts);
     const newTableScroll = el.querySelector('.table-scroll');
-    if (newTableScroll) newTableScroll.scrollTop = tableScrollTop;
+    if (newTableScroll) { newTableScroll.scrollTop = tableScrollTop; newTableScroll.scrollLeft = tableScrollLeft; }
     window.scrollTo(0, scrollY);
   }
 

@@ -166,6 +166,46 @@ export async function mount(root) {
     return { accounts, totalWithdrawal: row.totals.withdrawal || 0, age: row.age };
   }
 
+  const TRANSITION_TAX_STATUS_LABEL = {
+    taxDeferred: 'tax-deferred', roth: 'Roth', taxable: 'taxable', hsa: 'HSA', cash: 'cash',
+  };
+
+  // Plain-language narration of year-over-year transitions -- surfaced in the row's expanded
+  // panel so things like "why did the withdrawal amount change this year" are explained instead
+  // of silently happening. Every check here uses ONLY data already on the current row (or static
+  // plan/filing/social config) -- no previous-row lookup needed.
+  function transitionsFor(row, retirementYear) {
+    const lines = [];
+    if (row.phase === 'decumulation' && row.year === retirementYear) {
+      lines.push({ text: 'Retirement begins this year — withdrawals start covering spending.' });
+    }
+    if (Number.isFinite(filing.birthYear) && Number.isInteger(social.claimingAge)
+        && row.year === Math.round(filing.birthYear + social.claimingAge) && row.totals.socialSecurity > 0) {
+      lines.push({ text: `Social Security begins this year (${usdShort(row.totals.socialSecurity)}/yr), reducing how much needs to come from savings.` });
+    }
+    if (taxTables?.rmd && Number.isFinite(filing.birthYear) && row.age != null) {
+      const rbAge = requiredBeginningAge(filing.birthYear, taxTables.rmd);
+      if (row.age === rbAge) {
+        lines.push({ text: `Required Minimum Distributions begin this year (age ${rbAge}).` });
+        if (plan.rothConversionsEnabled && plan.sequencing === 'bracketFill') {
+          lines.push({ text: 'Roth conversions also stop from here on — this plan only converts in the gap years before RMDs.' });
+        }
+      }
+    }
+    for (const [id, a] of Object.entries(row.accounts || {})) {
+      if ((a.startBalance || 0) > 1 && (a.endBalance || 0) < 1) {
+        const acct = snapshot.accounts.find((x) => x.id === id);
+        const label = acct?.label || id;
+        const statusLabel = TRANSITION_TAX_STATUS_LABEL[acct?.taxStatus] || acct?.taxStatus || '';
+        lines.push({ text: `${label}${statusLabel ? ` (${statusLabel})` : ''} is fully depleted after this year.` });
+      }
+    }
+    if (row.totals.shortfall > 1) {
+      lines.push({ text: `Spending goal not fully met — a shortfall of ${usdShort(row.totals.shortfall)} this year.`, tone: 'critical' });
+    }
+    return lines;
+  }
+
   // Live "here's what that produces" readout for the Social Security section — recomputed from
   // the same engine functions the projection itself uses, so it never drifts from the real result.
   // ssEstimateBox (below) is a PERSISTENT element updated from refreshProjection(), same reason
@@ -218,6 +258,7 @@ export async function mount(root) {
     bracketBreakdownFor,
     contributionBreakdownFor,
     withdrawalBreakdownFor,
+    transitionsFor,
     getAccountLabel: (id) => snapshot.accounts.find((a) => a.id === id)?.label || id,
   });
 
