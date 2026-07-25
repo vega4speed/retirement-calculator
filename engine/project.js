@@ -60,7 +60,7 @@ function rowTotals(accounts, extraKeys) {
  * Which account plays which role is normally "the first account of a given taxStatus" (a
  * v1/single-person scope simplification -- others of the same status keep using their own
  * independent `contributions` setting instead), but can be overridden per-account via
- * `account.waterfallRole` ('employerPlan' | 'employerMatch' | 'rothIra') -- see below.
+ * `account.waterfallRole` ('employerPlan' | 'employerMatch' | 'rothIra' | 'none') -- see below.
  *
  * `waterfallRole: 'employerPlan'` decouples "which IRS limit + match rules apply" from
  * `taxStatus`: a Roth 401(k) needs `taxStatus: 'roth'` for tax treatment (post-tax contributions,
@@ -78,9 +78,16 @@ function rowTotals(accounts, extraKeys) {
  * when the employee's own election is Roth. Defaults to the same account as 'employerPlan' when
  * not set (today's exact behavior, since historically there was only ever one tier-1 account).
  *
- * Tier 3 ('rothIra', or the first 'roth' account not already claimed as 'employerPlan') assumes a
- * ROTH IRA (the smaller, separate IRS limit) -- a real, documented assumption, not a general
- * Roth-account cap.
+ * Tier 3 ('rothIra', or the first 'roth' account not already claimed as 'employerPlan' or marked
+ * 'none') assumes a ROTH IRA (the smaller, separate IRS limit) -- a real, documented assumption,
+ * not a general Roth-account cap.
+ *
+ * `waterfallRole: 'none'` opts an account OUT of every fallback search above -- without it, a
+ * household with SEVERAL Roth (or Traditional) accounts and only one explicitly given a role
+ * would still have its OTHER, otherwise-unrelated accounts silently swept into a fallback tier
+ * (which then computes its own contribution and ignores that account's independent
+ * `contributions` setting/override entirely) -- a real bug found when a user marked one Roth
+ * account 'employerPlan' and expected their other Roth accounts to stay untouched.
  *
  * Employer match is NOT part of your own budget -- it's free money added on top, tracked
  * separately (`employerMatchByAccount`), and never touches `runningBefore`: it was never your
@@ -147,13 +154,19 @@ function computeContributionWaterfall(p) {
     return fundTier(desiredGross, 0);
   };
 
+  // 'none' opts an account OUT of every fallback search below -- without it, a household with
+  // several Roth accounts and only ONE explicitly assigned a role would still have its OTHER,
+  // unrelated Roth accounts silently swept into the Roth-IRA fallback tier (which then computes
+  // its own contribution and stops reading that account's independent `contributions` setting).
+  const fallbackEligible = (a) => a.waterfallRole !== 'none';
+
   const employerPlanAccount = accounts.find((a) => a.waterfallRole === 'employerPlan')
-    ?? accounts.find((a) => a.taxStatus === 'taxDeferred'); // legacy fallback, unchanged behavior
+    ?? accounts.find((a) => a.taxStatus === 'taxDeferred' && fallbackEligible(a)); // legacy fallback, unchanged behavior
   const employerMatchAccount = accounts.find((a) => a.waterfallRole === 'employerMatch')
     ?? employerPlanAccount; // legacy fallback: match lands wherever the contribution does, as today
   const hsaAccount = accounts.find((a) => a.taxStatus === 'hsa');
   const rothIraAccount = accounts.find((a) => a.waterfallRole === 'rothIra' && a.id !== employerPlanAccount?.id)
-    ?? accounts.find((a) => a.taxStatus === 'roth' && a.id !== employerPlanAccount?.id); // legacy fallback
+    ?? accounts.find((a) => a.taxStatus === 'roth' && a.id !== employerPlanAccount?.id && fallbackEligible(a)); // legacy fallback
 
   let electiveRoom = employerPlanAccount ? electiveDeferralLimit(age, yearTable) : 0;
   if (employerPlanAccount) {

@@ -203,6 +203,30 @@ test('waterfallRole: rothIra explicitly picks which of two Roth accounts gets th
   approx(y.accounts.rothIraA.contribution, 0); // not claimed, defaults to $0 (no override set)
 });
 
+test('waterfallRole: "none" keeps an unrelated Roth account OUT of the Roth-IRA fallback tier (regression)', () => {
+  // Real bug: a household with one Roth account marked 'employerPlan' and several OTHER,
+  // unrelated Roth accounts (each with its OWN $0 contribution override, expecting to be left
+  // alone) still had one of those others silently swept into the Roth-IRA fallback tier -- which
+  // computes its own contribution and ignores that account's override entirely.
+  const r = projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [
+      { id: 'oldRothA', balance: 0, taxStatus: 'roth', waterfallRole: 'none' },
+      { id: 'oldRothB', balance: 0, taxStatus: 'roth', waterfallRole: 'none' },
+      { id: 'roth401k', balance: 0, taxStatus: 'roth', waterfallRole: 'employerPlan' },
+    ],
+    returnRate: { default: 0 }, wageGrowth: { default: 0 },
+    contributions: { default: 0.15, byAccount: { oldRothA: 0, oldRothB: 0 } },
+    income: { default: 100000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+    contributionWaterfallEnabled: true, contributionMode: 'percentOfIncome', waterfallBudget: { default: 0.15 },
+  });
+  const y = row(r, 2027);
+  approx(y.accounts.oldRothA.contribution, 0);
+  approx(y.accounts.oldRothB.contribution, 0);
+  approx(y.accounts.roth401k.contribution, 15000); // the full waterfall budget, dollar-for-dollar (Roth)
+});
+
 test('a non-waterfall account keeps using its own independent contributions setting, in the SAME shared deduction pool', () => {
   const r = projectAccumulation({
     startYear: 2026, endYear: 2027,

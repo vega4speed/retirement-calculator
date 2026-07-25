@@ -17,17 +17,27 @@ const TAX_STATUS = [
 // 401(k) elective-deferral limit + match instead of the small Roth IRA limit tier 3 assumes by
 // default, and employer match can land in a different account than the employee's own election
 // (the common case: Roth 401(k) contribution, Traditional match).
+// 'Auto (default)' lets the waterfall fall back to "first account of this taxStatus not already
+// claimed by another role" if nothing else claims a tier explicitly -- which is exactly what
+// caused a real bug: with one account marked 'employerPlan', a household's OTHER Roth accounts
+// (each individually set to "Auto") were still eligible for that same fallback search on the Roth
+// IRA tier, so the waterfall silently claimed one of them (overriding its own $0 contribution
+// override -- once a tier claims an account, it computes its own dollar amount and no longer
+// reads that account's `contributions` setting at all). 'none' opts an account OUT of every
+// fallback search entirely, guaranteeing "auto-pick something for this tier" never reaches it.
 const WATERFALL_ROLE = {
   taxDeferred: [
     ['', 'Auto (default)'],
     ['employerPlan', 'Employer plan (my contributions)'],
     ['employerMatch', 'Employer match lands here'],
+    ['none', 'Not part of the waterfall'],
   ],
   roth: [
     ['', 'Auto (default)'],
     ['employerPlan', 'Employer plan — Roth 401(k) (my contributions)'],
     ['rothIra', 'Roth IRA (small limit)'],
     ['employerMatch', 'Employer match lands here'],
+    ['none', 'Not part of the waterfall'],
   ],
 };
 
