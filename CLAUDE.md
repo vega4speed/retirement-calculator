@@ -134,9 +134,19 @@ engine/               pure calculation modules (unit-tested)
                          accounts by role (first taxDeferred/hsa/roth, same convention Roth
                          conversions already use — v1/single-person scope; a second account of the
                          same status keeps using its own independent `contributions` setting,
-                         composed into the SAME shared deduction pool afterward). Tier 3 assumes
-                         "roth" means a Roth IRA (the smaller, separate IRS limit), not a Roth
-                         401(k) (documented assumption, not a general Roth-account cap). Employer
+                         composed into the SAME shared deduction pool afterward — UNLESS an
+                         account carries an explicit per-account `waterfallRole`
+                         (`'employerPlan'|'employerMatch'|'rothIra'`, 2026-07-25), which wins over
+                         the array-order default at every tier: lets a Roth 401(k) use the big
+                         401(k) elective-deferral limit instead of tier 3's Roth IRA limit (funded
+                         dollar-for-dollar, no taxable-income reduction, unlike a Traditional
+                         account in the same role), and lets employer match land in a DIFFERENT
+                         account than the employee's own election (the common real-world case: a
+                         Roth 401(k) contribution with a Traditional match). Tier 3 (no explicit
+                         `rothIra` role set) assumes "roth" means a Roth IRA (the smaller, separate
+                         IRS limit), not a Roth 401(k) (documented assumption, not a general
+                         Roth-account cap — exactly what `waterfallRole` now lets you override).
+                         Employer
                          match (`matchRate`/`matchCapPercent`, plain constants not resolver
                          settings — a scope simplification) is FREE money tracked separately
                          (`employerMatch`, both per-account and in totals) — it's not your wages to
@@ -197,6 +207,11 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          (needs real IRS limits + brackets). Doesn't hide the existing "Annual
                          contribution" row — accounts NOT claimed by the waterfall (a second
                          taxDeferred account, taxable, cash) still use it independently.
+                         accounts-editor.js's per-account `waterfallRole` dropdown (2026-07-25,
+                         see project.js above) is the one way to override which specific account
+                         plays which tier — always shown (not gated on `contributionWaterfallEnabled`),
+                         same reasoning as every other per-account column here: the value should be
+                         settable regardless of whether the waterfall happens to be on right now.
   project-adapter.js    projectFor(state, taxTables) — the ONE place that maps the app's
                          {snapshot, assumptions, plan, filing, social} state shape to a
                          project() call. Shared by app.js (the live editor) and scenarios.js
@@ -386,6 +401,21 @@ contributed and ending balance did not, in a pattern (less contributed, way more
 that points at a stale cached page or a hidden per-year override rather than a live engine bug —
 nothing in this session's own reproduction was wrong. In progress: couple/spousal Social Security
 (the remaining v1-boundary item from §13).
+
+**Per-account waterfall roles (2026-07-25):** the contribution waterfall's tier assignment ("first
+`taxDeferred` account" for match/limit, "first `roth`" for the Roth IRA tier) used to conflate
+`taxStatus` (how an account is TAXED) with which contribution-limit regime applies — real for the
+common case, but wrong for a Roth 401(k): its `taxStatus` is `roth` (post-tax, tax-free growth),
+but it should use the big 401(k) elective-deferral limit, not the small Roth IRA limit tier 3
+otherwise assumes. A new per-account `waterfallRole` (`'employerPlan' | 'employerMatch' | 'rothIra'`,
+set via a new "Waterfall role" column in the accounts editor) decouples the two: mark a Roth 401(k)
+`employerPlan` to get the 401(k) limit + match + tier-4 spillover, funded dollar-for-dollar (no
+tax deduction, unlike a Traditional account in the same role). Also handles the common real-world
+case where the employer match lands in a SEPARATE Traditional account from a Roth 401(k) election
+(`employerMatch` on that account, independent of `employerPlan`) — this is exactly why the earlier
+per-account-columns diagnosis above found an "AF Match" account sitting alongside Roth accounts in
+a real user's exported plan. No role set anywhere ⇒ byte-identical to prior behavior (the legacy
+"first account of a taxStatus" rule is the fallback at every tier).
 
 **Fixed 2026-07-22 (two small UI bugs):**
 1. Clicking a Tax cell to expand its per-bracket breakdown — or toggling "Show table" — fully

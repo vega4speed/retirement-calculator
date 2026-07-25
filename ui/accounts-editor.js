@@ -12,6 +12,25 @@ const TAX_STATUS = [
   ['cash', 'Cash / savings'],
 ];
 
+// Which account plays which role in the contribution waterfall (engine/project.js's
+// computeContributionWaterfall) -- independent of taxStatus, so a Roth 401(k) can use the big
+// 401(k) elective-deferral limit + match instead of the small Roth IRA limit tier 3 assumes by
+// default, and employer match can land in a different account than the employee's own election
+// (the common case: Roth 401(k) contribution, Traditional match).
+const WATERFALL_ROLE = {
+  taxDeferred: [
+    ['', 'Auto (default)'],
+    ['employerPlan', 'Employer plan (my contributions)'],
+    ['employerMatch', 'Employer match lands here'],
+  ],
+  roth: [
+    ['', 'Auto (default)'],
+    ['employerPlan', 'Employer plan — Roth 401(k) (my contributions)'],
+    ['rothIra', 'Roth IRA (small limit)'],
+    ['employerMatch', 'Employer match lands here'],
+  ],
+};
+
 let idSeq = 1;
 const newId = () => `acct-${idSeq++}`;
 
@@ -37,9 +56,10 @@ export function createAccountsEditor(opts) {
   function row(acct, i) {
     const isTaxable = acct.taxStatus === 'taxable';
     const isHsa = acct.taxStatus === 'hsa';
+    const roleOptions = WATERFALL_ROLE[acct.taxStatus];
     return h('tr', {},
       h('td', {}, h('input', { type: 'text', value: acct.label, placeholder: 'e.g. Fidelity 401(k)', class: 'label', onchange: (e) => { acct.label = e.target.value; onChange(accounts); } })),
-      h('td', {}, h('select', { onchange: (e) => { acct.taxStatus = e.target.value; if (acct.taxStatus !== 'taxable') delete acct.costBasis; if (acct.taxStatus !== 'hsa') { delete acct.hsaMaxOut; delete acct.hsaViaPayroll; } emit(); } },
+      h('td', {}, h('select', { onchange: (e) => { acct.taxStatus = e.target.value; if (acct.taxStatus !== 'taxable') delete acct.costBasis; if (acct.taxStatus !== 'hsa') { delete acct.hsaMaxOut; delete acct.hsaViaPayroll; } if (!WATERFALL_ROLE[acct.taxStatus]) delete acct.waterfallRole; emit(); } },
         ...TAX_STATUS.map(([v, lbl]) => h('option', { value: v, selected: acct.taxStatus === v }, lbl)))),
       h('td', { class: 'r' }, h('span', { class: 'field' }, h('span', { class: 'affix' }, '$'),
         h('input', { type: 'number', step: 'any', value: acct.balance ?? 0, class: 'num', onchange: (e) => { acct.balance = Number(e.target.value); onChange(accounts); } }))),
@@ -56,6 +76,10 @@ export function createAccountsEditor(opts) {
               h('input', { type: 'checkbox', checked: acct.hsaViaPayroll !== false, onchange: (e) => { acct.hsaViaPayroll = e.target.checked; onChange(accounts); } }),
               ' Via payroll'))
         : h('span', { class: 'muted small' }, 'n/a')),
+      h('td', { class: 'r' }, roleOptions
+        ? h('select', { onchange: (e) => { if (e.target.value) acct.waterfallRole = e.target.value; else delete acct.waterfallRole; onChange(accounts); } },
+            ...roleOptions.map(([v, lbl]) => h('option', { value: v, selected: (acct.waterfallRole || '') === v }, lbl)))
+        : h('span', { class: 'muted small' }, 'n/a')),
       h('td', { class: 'r' }, h('button', { class: 'link', onclick: () => { accounts.splice(i, 1); emit(); } }, '✕')),
     );
   }
@@ -65,7 +89,8 @@ export function createAccountsEditor(opts) {
     const table = h('table', { class: 'accounts-table' },
       h('thead', {}, h('tr', {},
         h('th', {}, 'Account'), h('th', {}, 'Tax status'), h('th', { class: 'r' }, 'Balance'),
-        h('th', { class: 'r' }, 'Cost basis'), h('th', { class: 'r' }, 'HSA options'), h('th', {}, ''))),
+        h('th', { class: 'r' }, 'Cost basis'), h('th', { class: 'r' }, 'HSA options'),
+        h('th', { class: 'r' }, 'Waterfall role'), h('th', {}, ''))),
       h('tbody', {}, ...accounts.map(row)),
     );
     const total = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);

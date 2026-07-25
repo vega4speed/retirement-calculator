@@ -21,6 +21,7 @@ function paramsFor(state, taxTables) {
     costBasis: a.costBasis != null ? Number(a.costBasis) : undefined,
     hsaMaxOut: a.taxStatus === 'hsa' ? !!a.hsaMaxOut : undefined,
     hsaViaPayroll: a.taxStatus === 'hsa' ? a.hsaViaPayroll !== false : undefined,
+    waterfallRole: a.waterfallRole,
   }));
   if (!accounts.length) return null;
   const startYear = parseInt(String(snapshot.asOf).slice(0, 4), 10) || new Date().getFullYear();

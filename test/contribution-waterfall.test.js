@@ -144,6 +144,65 @@ test('no HSA or Roth account: tier 2/3 are silently skipped, budget flows straig
   approx(y.accounts.trad401k.contribution, 4000 + 11880 / 0.78, 1e-3);
 });
 
+test('waterfallRole: a Roth 401(k) as the employer plan uses the elective-deferral limit (not the Roth IRA limit) and never reduces taxable income', () => {
+  const r = projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [
+      { id: 'roth401k', balance: 0, taxStatus: 'roth', waterfallRole: 'employerPlan' },
+    ],
+    returnRate: { default: 0 }, wageGrowth: { default: 0 },
+    income: { default: 100000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+    contributionWaterfallEnabled: true, waterfallBudget: { default: 50000 }, // way more than the limit
+  });
+  const y = row(r, 2027);
+  // Full elective-deferral limit (24500, no age given), funded dollar-for-dollar (Roth = post-tax,
+  // no gross-up) -- NOT the small Roth IRA limit (7500) tier 3 would otherwise assume.
+  approx(y.accounts.roth401k.contribution, 24500);
+  approx(y.accounts.roth401k.employerMatch, 0.04 * 100000);
+  // Taxable income is UNCHANGED from before any contribution (100000 - stdDeduction) -- a Roth
+  // contribution never reduces it, unlike a Traditional one.
+  approx(y.totals.taxableIncome, 100000 - 16100, 1e-3);
+});
+
+test('waterfallRole: employer match can land in a SEPARATE Traditional account from a Roth 401(k) employee election', () => {
+  const r = projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [
+      { id: 'roth401k', balance: 0, taxStatus: 'roth', waterfallRole: 'employerPlan' },
+      { id: 'matchAcct', balance: 0, taxStatus: 'taxDeferred', waterfallRole: 'employerMatch' },
+    ],
+    returnRate: { default: 0 }, wageGrowth: { default: 0 },
+    income: { default: 100000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+    contributionWaterfallEnabled: true, waterfallBudget: { default: 50000 },
+  });
+  const y = row(r, 2027);
+  approx(y.accounts.roth401k.contribution, 24500); // employee's own election, all Roth
+  approx(y.accounts.roth401k.employerMatch, 0); // no match landed in the Roth account
+  approx(y.accounts.matchAcct.contribution, 0); // match-only account gets no employee contribution
+  approx(y.accounts.matchAcct.employerMatch, 0.04 * 100000); // the match landed here instead
+  approx(y.totals.taxableIncome, 100000 - 16100, 1e-3); // still untouched -- match is free money, not deductible
+});
+
+test('waterfallRole: rothIra explicitly picks which of two Roth accounts gets the IRA-limit tier', () => {
+  const r = projectAccumulation({
+    startYear: 2026, endYear: 2027,
+    accounts: [
+      { id: 'roth401k', balance: 0, taxStatus: 'roth', waterfallRole: 'employerPlan' },
+      { id: 'rothIraB', balance: 0, taxStatus: 'roth', waterfallRole: 'rothIra' },
+      { id: 'rothIraA', balance: 0, taxStatus: 'roth' }, // earlier in array order, but no explicit role
+    ],
+    returnRate: { default: 0 }, wageGrowth: { default: 0 },
+    income: { default: 100000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+    bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+    contributionWaterfallEnabled: true, waterfallBudget: { default: 50000 },
+  });
+  const y = row(r, 2027);
+  approx(y.accounts.rothIraB.contribution, 7500); // explicit role wins over array order
+  approx(y.accounts.rothIraA.contribution, 0); // not claimed, defaults to $0 (no override set)
+});
+
 test('a non-waterfall account keeps using its own independent contributions setting, in the SAME shared deduction pool', () => {
   const r = projectAccumulation({
     startYear: 2026, endYear: 2027,

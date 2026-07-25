@@ -52,18 +52,35 @@ function rowTotals(accounts, extraKeys) {
 
 /**
  * The standard "investment order" waterfall (design doc, Phase 6.7): given ONE overall take-home
- * budget for the year, fill four tiers in priority order -- Traditional up to the employer match,
- * HSA to its max, Roth IRA to its (phase-out-adjusted) limit, then back to Traditional for
+ * budget for the year, fill four tiers in priority order -- the employer plan up to the match,
+ * HSA to its max, Roth IRA to its (phase-out-adjusted) limit, then back to the employer plan for
  * whatever's left of the budget -- rather than the caller typing a separate number into each
- * account's own `contributions` setting. Reuses the SAME account-role convention Roth conversions
- * already use: "the first account of this taxStatus" (a v1/single-person scope simplification --
- * if you have multiple accounts of the same status, only the first participates in the waterfall;
- * the others keep using their own independent `contributions` setting, composed into the SAME
- * shared tax-deferred deduction pool afterward by projectAccumulation's caller).
+ * account's own `contributions` setting.
  *
- * Tier 3 assumes the "roth" account is a ROTH IRA (the smaller, separate IRS limit), not a Roth
- * 401(k) (which would share the SAME big limit as Traditional, and wouldn't need a "switch back
- * to Traditional" step at all) -- a real, documented assumption, not a general Roth-account cap.
+ * Which account plays which role is normally "the first account of a given taxStatus" (a
+ * v1/single-person scope simplification -- others of the same status keep using their own
+ * independent `contributions` setting instead), but can be overridden per-account via
+ * `account.waterfallRole` ('employerPlan' | 'employerMatch' | 'rothIra') -- see below.
+ *
+ * `waterfallRole: 'employerPlan'` decouples "which IRS limit + match rules apply" from
+ * `taxStatus`: a Roth 401(k) needs `taxStatus: 'roth'` for tax treatment (post-tax contributions,
+ * tax-free growth) but the BIG 401(k) elective-deferral limit (electiveDeferralLimit(), shared
+ * with a Traditional 401(k) under real IRS rules) rather than the small Roth IRA limit tier 3
+ * assumes. Its contribution is funded pre-tax (reduces `runningBefore`) when the account's
+ * `taxStatus` is 'taxDeferred', or dollar-for-dollar post-tax (no `runningBefore` change) when
+ * it's 'roth' -- same branching `fundEmployerPlan` below applies at both the match-cap tier and
+ * the tier-4 spillover. (Scope note: a household with BOTH a Traditional 401(k) AND a Roth 401(k)
+ * sharing one real combined limit isn't modeled -- only one account can hold 'employerPlan', same
+ * flavor of simplification as tier 3's Roth-IRA-only assumption below.)
+ *
+ * `waterfallRole: 'employerMatch'` is a SEPARATE, independently-assignable role: real 401(k)
+ * plans near-universally deposit the employer match into a separate Traditional sub-account even
+ * when the employee's own election is Roth. Defaults to the same account as 'employerPlan' when
+ * not set (today's exact behavior, since historically there was only ever one tier-1 account).
+ *
+ * Tier 3 ('rothIra', or the first 'roth' account not already claimed as 'employerPlan') assumes a
+ * ROTH IRA (the smaller, separate IRS limit) -- a real, documented assumption, not a general
+ * Roth-account cap.
  *
  * Employer match is NOT part of your own budget -- it's free money added on top, tracked
  * separately (`employerMatchByAccount`), and never touches `runningBefore`: it was never your
@@ -71,7 +88,7 @@ function rowTotals(accounts, extraKeys) {
  * deferral, which reduces Box 1 wages).
  *
  * @param {object} p
- * @param {{id:string, taxStatus:string, hsaViaPayroll?:boolean}[]} p.accounts
+ * @param {{id:string, taxStatus:string, hsaViaPayroll?:boolean, waterfallRole?:string}[]} p.accounts
  * @param {number} p.income        this year's nominal income
  * @param {number|null} p.age
  * @param {number} p.runningBefore taxable income position BEFORE the waterfall's own deductions
@@ -118,18 +135,44 @@ function computeContributionWaterfall(p) {
     return actual;
   };
 
-  const tier1Account = accounts.find((a) => a.taxStatus === 'taxDeferred');
-  const hsaAccount = accounts.find((a) => a.taxStatus === 'hsa');
-  const rothAccount = accounts.find((a) => a.taxStatus === 'roth');
+  // The employer-plan tier's OWN contribution: pre-tax (reduces runningBefore, via fundTier) when
+  // the account is Traditional, post-tax dollar-for-dollar (no runningBefore change) when it's a
+  // Roth 401(k) -- same "no deduction, no gross-up" treatment as the Roth IRA tier below.
+  const fundEmployerPlan = (account, desiredGross) => {
+    if (account.taxStatus === 'roth') {
+      const actual = Math.min(Math.max(0, desiredGross), remainingBudget);
+      remainingBudget -= actual;
+      return actual;
+    }
+    return fundTier(desiredGross, 0);
+  };
 
-  let electiveRoom = tier1Account ? electiveDeferralLimit(age, yearTable) : 0;
-  if (tier1Account) {
-    claimedAccountIds.add(tier1Account.id);
+  const employerPlanAccount = accounts.find((a) => a.waterfallRole === 'employerPlan')
+    ?? accounts.find((a) => a.taxStatus === 'taxDeferred'); // legacy fallback, unchanged behavior
+  const employerMatchAccount = accounts.find((a) => a.waterfallRole === 'employerMatch')
+    ?? employerPlanAccount; // legacy fallback: match lands wherever the contribution does, as today
+  const hsaAccount = accounts.find((a) => a.taxStatus === 'hsa');
+  const rothIraAccount = accounts.find((a) => a.waterfallRole === 'rothIra' && a.id !== employerPlanAccount?.id)
+    ?? accounts.find((a) => a.taxStatus === 'roth' && a.id !== employerPlanAccount?.id); // legacy fallback
+
+  let electiveRoom = employerPlanAccount ? electiveDeferralLimit(age, yearTable) : 0;
+  if (employerPlanAccount) {
+    claimedAccountIds.add(employerPlanAccount.id);
+    if (employerMatchAccount) {
+      claimedAccountIds.add(employerMatchAccount.id);
+      // A distinct match-only account (e.g. Traditional match alongside a Roth 401(k) employee
+      // election) is claimed here but never separately "funded" -- it receives ONLY the employer
+      // match below, no employee contribution of its own. Without this, its contributionByAccount
+      // entry would stay unset (undefined), and the caller adds it directly into endBalance math.
+      if (employerMatchAccount.id !== employerPlanAccount.id) contributionByAccount[employerMatchAccount.id] = 0;
+    }
     const matchCap = matchCapPercent * income;
     const tier1Desired = Math.min(matchCap, electiveRoom);
-    const tier1Actual = fundTier(tier1Desired, 0);
-    contributionByAccount[tier1Account.id] = tier1Actual;
-    employerMatchByAccount[tier1Account.id] = tier1Actual * matchRate;
+    const tier1Actual = fundEmployerPlan(employerPlanAccount, tier1Desired);
+    contributionByAccount[employerPlanAccount.id] = tier1Actual;
+    if (employerMatchAccount) {
+      employerMatchByAccount[employerMatchAccount.id] = tier1Actual * matchRate;
+    }
     electiveRoom -= tier1Actual;
   }
 
@@ -140,17 +183,17 @@ function computeContributionWaterfall(p) {
     contributionByAccount[hsaAccount.id] = fundTier(hsaCap, hsaViaPayroll ? ficaRate : 0);
   }
 
-  if (rothAccount) {
-    claimedAccountIds.add(rothAccount.id);
+  if (rothIraAccount) {
+    claimedAccountIds.add(rothIraAccount.id);
     const rothCap = iraContributionLimit(age, yearTable) * rothIraPhaseOutFactor(income, filingStatus, yearTable);
-    // Roth: no deduction, no gross-up -- straight dollar-for-dollar against the remaining budget.
+    // Roth IRA: no deduction, no gross-up -- straight dollar-for-dollar against the remaining budget.
     const rothActual = Math.min(Math.max(0, rothCap), remainingBudget);
-    contributionByAccount[rothAccount.id] = rothActual;
+    contributionByAccount[rothIraAccount.id] = rothActual;
     remainingBudget -= rothActual;
   }
 
-  if (tier1Account && electiveRoom > 1e-9) {
-    contributionByAccount[tier1Account.id] += fundTier(electiveRoom, 0);
+  if (employerPlanAccount && electiveRoom > 1e-9) {
+    contributionByAccount[employerPlanAccount.id] += fundEmployerPlan(employerPlanAccount, electiveRoom);
   }
 
   return { contributionByAccount, employerMatchByAccount, claimedAccountIds, runningBefore };
@@ -1122,7 +1165,7 @@ export function project(p) {
     startYear: baseYear, endYear: retirementYear,
     accounts: accounts.map((a) => ({
       id: a.id, balance: a.balance, taxStatus: a.taxStatus,
-      hsaMaxOut: a.hsaMaxOut, hsaViaPayroll: a.hsaViaPayroll,
+      hsaMaxOut: a.hsaMaxOut, hsaViaPayroll: a.hsaViaPayroll, waterfallRole: a.waterfallRole,
     })),
     returnRate: p.returnRate, contributions: p.contributions, contributionMode: p.contributionMode,
     wageGrowth: p.wageGrowth, inflation: p.inflation,
