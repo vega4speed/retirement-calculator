@@ -329,6 +329,22 @@ function buildTable(result, opts = {}) {
   const hasConversion = rows.some((r) => r.totals.conversion);
   const hasMatch = rows.some((r) => r.totals.employerMatch);
   const hasSS = rows.some((r) => r.totals.socialSecurity > 0);
+
+  // Pin the expand-toggle/Year/Age columns so they stay in view while scrolling the table
+  // horizontally (a long row has 15+ columns) -- fixed pixel widths avoid the left offsets
+  // drifting as content changes width. `edge` gets the right-edge divider shadow, marking the
+  // boundary between pinned and scrolling columns; it's Age when present, else Year.
+  const PIN_WIDTH = { toggle: 28, year: 48, age: 40 };
+  const pinLeft = { toggle: 0, year: PIN_WIDTH.toggle, age: PIN_WIDTH.toggle + PIN_WIDTH.year };
+  const stickyStyle = (col, isHeader) => {
+    const edge = hasAge ? col === 'age' : col === 'year';
+    const style = {
+      position: 'sticky', left: `${pinLeft[col]}px`, width: `${PIN_WIDTH[col]}px`,
+      background: isHeader ? 'var(--card)' : 'var(--bg)', zIndex: isHeader ? 3 : 2,
+    };
+    if (edge) style.boxShadow = isHeader ? '0 1px 0 var(--line), 2px 0 4px -2px rgba(0,0,0,.15)' : '2px 0 4px -2px rgba(0,0,0,.15)';
+    return style;
+  };
   const {
     expandedYears, onToggleExpand, bracketBreakdownFor, contributionBreakdownFor,
     withdrawalBreakdownFor, transitionsFor,
@@ -401,7 +417,7 @@ function buildTable(result, opts = {}) {
       hasBalanceDetail ? { title: 'Balance', content: balanceSectionContent(r, toDisplay) } : null,
     ].filter((sec) => sec?.content);
     const rowHasDetail = sections.length > 0;
-    const toggleCell = h('td', {}, rowHasDetail
+    const toggleCell = h('td', { style: stickyStyle('toggle', false) }, rowHasDetail
       ? h('button', { class: 'link tax-link', onclick: () => onToggleExpand(r.year) }, isExpanded(r.year) ? '▾' : '▸')
       : null);
 
@@ -427,9 +443,9 @@ function buildTable(result, opts = {}) {
 
     bodyRows.push(h('tr', {},
       toggleCell,
-      h('td', {}, r.year),
+      h('td', { style: stickyStyle('year', false) }, r.year),
       h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
-      hasAge ? h('td', { class: 'r' }, r.age ?? '—') : null,
+      hasAge ? h('td', { class: 'r', style: stickyStyle('age', false) }, r.age ?? '—') : null,
       hasTax ? h('td', { class: 'r' }, displayIncome ? usdFull(val(displayIncome, r)) : '—') : null,
       hasSS ? h('td', { class: 'r' }, r.totals.socialSecurity ? usdFull(val(r.totals.socialSecurity, r)) : '—') : null,
       contributionCell,
@@ -449,8 +465,10 @@ function buildTable(result, opts = {}) {
 
   const table = h('table', { class: 'proj-table' },
     h('thead', {}, h('tr', {},
-      h('th', {}, ''), h('th', {}, 'Year'), h('th', {}, 'Phase'),
-      hasAge ? h('th', { class: 'r' }, 'Age') : null,
+      h('th', { style: stickyStyle('toggle', true) }, ''),
+      h('th', { style: stickyStyle('year', true) }, 'Year'),
+      h('th', {}, 'Phase'),
+      hasAge ? h('th', { class: 'r', style: stickyStyle('age', true) }, 'Age') : null,
       hasTax ? h('th', { class: 'r' }, 'Income') : null,
       hasSS ? h('th', { class: 'r' }, 'Social Security') : null,
       h('th', { class: 'r' }, 'Total contribution'),
