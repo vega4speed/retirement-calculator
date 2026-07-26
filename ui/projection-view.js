@@ -50,7 +50,11 @@ function buildChart(result) {
   const baseYear = rows[0].year;
   const endYear = rows[rows.length - 1].year;
   const retYear = result.retirementYear;
-  const W = 760, H = 360, m = { t: 20, r: 132, b: 40, l: 66 };
+  // The SVG stretches to 100% of the (now much wider) page, so its viewBox units set the rendered
+  // scale of everything inside it: a WIDER viewBox at the same rendered width shrinks the text and
+  // strokes proportionally. W 760 -> 1000 zooms the whole chart out ~24%; H then sets the aspect
+  // ratio, and 355/1000 is ~25% shorter on screen than the old 360/760 was.
+  const W = 1000, H = 355, m = { t: 20, r: 132, b: 40, l: 66 };
   const plotW = W - m.l - m.r, plotH = H - m.t - m.b;
 
   const ymax = niceCeil(Math.max(1, ...rows.map((r) => r.totals.endBalance)));

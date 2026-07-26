@@ -70,7 +70,9 @@ function buildComparisonChart(entries) {
   const baseYear = Math.min(...entries.map((e) => e.result.years[0].year));
   const endYear = Math.max(...entries.map((e) => e.result.years[e.result.years.length - 1].year));
   const ymax = niceCeil(Math.max(1, ...allRows.map((r) => r.real.endBalance)));
-  const W = 760, H = 340, m = { t: 20, r: 24, b: 40, l: 66 };
+  // Same zoom-out as projection-view.js's chart (see its note): a wider viewBox at the same
+  // rendered width shrinks text/strokes, and the aspect ratio makes it ~25% shorter on screen.
+  const W = 1000, H = 335, m = { t: 20, r: 24, b: 40, l: 66 };
   const plotW = W - m.l - m.r, plotH = H - m.t - m.b;
   const xspan = Math.max(1, endYear - baseYear);
   const xScale = (yr) => m.l + ((yr - baseYear) / xspan) * plotW;
