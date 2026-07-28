@@ -147,6 +147,23 @@ engine/               pure calculation modules (unit-tested)
                          unconditional tax-law fact, not a toggle). Each account row also carries
                          `netCost` (the take-home figure, informational — undefined for roth/
                          taxable/cash, which have no gross-up to report).
+                         `waterfallRole: 'employerPlanRoth'` (2026-07-28): the ROTH SIDE of a plan
+                         offering both elections. Shares `electiveRoom` with the 'employerPlan'
+                         account (real IRS rule: ONE combined employee limit across both sides, not
+                         one each), funded dollar-for-dollar post-tax, and runs as its own tier
+                         AFTER the Roth IRA tier and BEFORE the Traditional spillover — so under
+                         'bracketAware' the budget left once income is deducted down to the ceiling
+                         lands in the Roth side at the PLAN limit instead of going back to
+                         Traditional or being capped at the much smaller Roth IRA limit (it's
+                         excluded from tier 3's fallback search for exactly that reason). For the
+                         SECOND side of a plan whose Traditional side is 'employerPlan'; a
+                         Roth-ONLY plan still uses 'employerPlan' itself (that path already funds
+                         post-tax at the elective limit and is what drives the tier-1 match).
+                         Found via a real user plan whose 403(b) offers both: with only
+                         'employerPlan' available, their Traditional deduction fell back to a
+                         DIFFERENT taxDeferred account capped at the IRA limit (~$12k) while the
+                         rest of the budget went post-tax into the Roth 403(b), leaving $24.8k of
+                         2038 income stranded in the 22% bracket.
                          Waterfall order 'bracketAware' (2026-07-27): an alternative tier order to
                          the 'standard' one below, selected via `waterfallOrder` +
                          `waterfallRothBracketRate` — match, HSA max, then TRADITIONAL sized as

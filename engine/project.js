@@ -69,9 +69,9 @@ function rowTotals(accounts, extraKeys) {
  * assumes. Its contribution is funded pre-tax (reduces `runningBefore`) when the account's
  * `taxStatus` is 'taxDeferred', or dollar-for-dollar post-tax (no `runningBefore` change) when
  * it's 'roth' -- same branching `fundEmployerPlan` below applies at both the match-cap tier and
- * the tier-4 spillover. (Scope note: a household with BOTH a Traditional 401(k) AND a Roth 401(k)
- * sharing one real combined limit isn't modeled -- only one account can hold 'employerPlan', same
- * flavor of simplification as tier 3's Roth-IRA-only assumption below.)
+ * the tier-4 spillover. (A plan offering BOTH elections, sharing one real combined limit, IS
+ * modeled now -- mark the Traditional side 'employerPlan' and the Roth side 'employerPlanRoth',
+ * described below. Only one account can hold each role.)
  *
  * `waterfallRole: 'employerMatch'` is a SEPARATE, independently-assignable role: real 401(k)
  * plans near-universally deposit the employer match into a separate Traditional sub-account even
@@ -81,6 +81,19 @@ function rowTotals(accounts, extraKeys) {
  * Tier 3 ('rothIra', or the first 'roth' account not already claimed as 'employerPlan' or marked
  * 'none') assumes a ROTH IRA (the smaller, separate IRS limit) -- a real, documented assumption,
  * not a general Roth-account cap.
+ *
+ * `waterfallRole: 'employerPlanRoth'` (2026-07-28) is the ROTH SIDE of a plan that offers both --
+ * a real 401(k)/403(b) where you can split one elective deferral between a Traditional and a Roth
+ * election. It shares `electiveRoom` with the 'employerPlan' account (real IRS rule: ONE combined
+ * employee limit across both elections, not one each), is funded dollar-for-dollar post-tax like
+ * any other Roth, and runs as its own tier AFTER the Roth IRA tier and BEFORE the Traditional
+ * spillover -- so under 'bracketAware' the budget left over once income has been deducted down to
+ * the bracket ceiling lands in the Roth side of the plan rather than going back to Traditional.
+ * It's excluded from tier 3's Roth-IRA fallback search (being claimed there instead would cap it
+ * at the much smaller IRA limit -- exactly the bug this role exists to avoid). Use it for the
+ * SECOND side of a plan whose Traditional side is marked 'employerPlan'; a Roth-ONLY plan should
+ * still use 'employerPlan' itself (that path already funds post-tax at the elective limit, and is
+ * what drives the tier-1 match).
  *
  * `waterfallRole: 'none'` opts an account OUT of every fallback search above -- without it, a
  * household with SEVERAL Roth (or Traditional) accounts and only one explicitly given a role
@@ -115,7 +128,7 @@ function rowTotals(accounts, extraKeys) {
  * legitimately count toward reaching the ceiling -- tier 3 only funds what's still needed.
  *
  * @param {object} p
- * @param {{id:string, taxStatus:string, hsaViaPayroll?:boolean, waterfallRole?:string}[]} p.accounts
+ * @param {{id:string, taxStatus:string, hsaViaPayroll?:boolean, waterfallRole?:('employerPlan'|'employerPlanRoth'|'employerMatch'|'rothIra'|'none')}[]} p.accounts
  * @param {number} p.income        this year's nominal income
  * @param {number|null} p.age
  * @param {number} p.runningBefore taxable income position BEFORE the waterfall's own deductions
@@ -203,10 +216,16 @@ function computeContributionWaterfall(p) {
   const employerMatchAccount = accounts.find((a) => a.waterfallRole === 'employerMatch')
     ?? employerPlanAccount; // legacy fallback: match lands wherever the contribution does, as today
   const hsaAccount = accounts.find((a) => a.taxStatus === 'hsa');
-  const rothIraAccount = accounts.find((a) => a.waterfallRole === 'rothIra' && a.id !== employerPlanAccount?.id)
-    ?? accounts.find((a) => a.taxStatus === 'roth' && a.id !== employerPlanAccount?.id && fallbackEligible(a)); // legacy fallback
+  // The Roth side of an employer plan that offers both -- never swept into the Roth IRA tier below
+  // (that would cap it at the IRA limit instead of the shared elective-deferral limit).
+  const rothPlanAccount = accounts.find((a) => a.waterfallRole === 'employerPlanRoth'
+    && a.taxStatus === 'roth' && a.id !== employerPlanAccount?.id);
+  const notRothPlan = (a) => a.id !== rothPlanAccount?.id;
+  const rothIraAccount = accounts.find((a) => a.waterfallRole === 'rothIra' && a.id !== employerPlanAccount?.id && notRothPlan(a))
+    ?? accounts.find((a) => a.taxStatus === 'roth' && a.id !== employerPlanAccount?.id && notRothPlan(a) && fallbackEligible(a)); // legacy fallback
 
-  let electiveRoom = employerPlanAccount ? electiveDeferralLimit(age, yearTable) : 0;
+  // ONE elective-deferral limit covers the Traditional and Roth sides together (real IRS rule).
+  let electiveRoom = (employerPlanAccount || rothPlanAccount) ? electiveDeferralLimit(age, yearTable) : 0;
   if (employerPlanAccount) {
     claimedAccountIds.add(employerPlanAccount.id);
     if (employerMatchAccount) {
@@ -268,6 +287,20 @@ function computeContributionWaterfall(p) {
     contributionByAccount[rothIraAccount.id] = rothActual;
     netContributionCostByAccount[rothIraAccount.id] = (netContributionCostByAccount[rothIraAccount.id] || 0) + rothActual;
     remainingBudget -= rothActual;
+  }
+
+  // The Roth side of the employer plan: post-tax dollar-for-dollar (no deduction, no gross-up),
+  // drawing on the SAME electiveRoom the Traditional side has already spent from. Sits ahead of
+  // the Traditional spillover below so that 'bracketAware' does what it says -- once income has
+  // been deducted to the bracket ceiling, the rest of the budget goes Roth rather than deducting
+  // dollars that were never worth deducting.
+  if (rothPlanAccount) {
+    claimedAccountIds.add(rothPlanAccount.id);
+    const actual = Math.min(Math.max(0, electiveRoom), remainingBudget);
+    contributionByAccount[rothPlanAccount.id] = (contributionByAccount[rothPlanAccount.id] || 0) + actual;
+    netContributionCostByAccount[rothPlanAccount.id] = (netContributionCostByAccount[rothPlanAccount.id] || 0) + actual;
+    remainingBudget -= actual;
+    electiveRoom -= actual;
   }
 
   if (employerPlanAccount && electiveRoom > 1e-9) {

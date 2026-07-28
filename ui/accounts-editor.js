@@ -35,6 +35,7 @@ const WATERFALL_ROLE = {
   roth: [
     ['', 'Auto (default)'],
     ['employerPlan', 'Employer plan — Roth 401(k) (my contributions)'],
+    ['employerPlanRoth', 'Employer plan — Roth side (shares one limit with the Traditional side)'],
     ['rothIra', 'Roth IRA (small limit)'],
     ['employerMatch', 'Employer match lands here'],
     ['none', 'Not part of the waterfall'],

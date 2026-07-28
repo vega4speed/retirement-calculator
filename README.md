@@ -157,6 +157,12 @@ already sits at or below that bracket, no extra Traditional is funded and everyt
 goes to Roth. Your 401(k) elective-deferral limit still caps it, and anything past the Roth IRA
 limit spills back to the 401(k) as before.
 
+If your workplace plan offers **both** a Traditional and a Roth election, mark the Traditional
+account "Employer plan" and the Roth one "Employer plan — Roth side." They then share a single
+elective-deferral limit, the way the IRS actually treats them, and whatever budget is left once
+your income has been deducted down to your chosen bracket goes into the Roth side at the full plan
+limit rather than the much smaller Roth IRA one.
+
 Employer match is modeled separately as free money on top of your own contribution, shown as its
 own stat tile and table column. During your working years the projection table breaks each year's
 contributions down by tax treatment — pre-tax, Roth, and HSA columns alongside the total (expand

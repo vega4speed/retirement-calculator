@@ -353,3 +353,73 @@ test('REGRESSION: omitting waterfallOrder is exactly the standard order', () => 
     approx(omitted.years[i].totals.taxableIncome || 0, explicit.years[i].totals.taxableIncome || 0, 1e-9);
   }
 });
+
+// --- 'employerPlanRoth': both sides of one plan, sharing one limit (2026-07-28) --------------
+// A real 401(k)/403(b) lets you split ONE elective deferral between a Traditional and a Roth
+// election. Base case below: income 80000 single, stdDeduction 16100 -> before = 63900 (in the
+// 22% band, 50400..105700). Budget 30000 flat. Ceiling = top of the 12% bracket = 50400.
+
+const bothSidesBase = (overrides = {}) => ({
+  startYear: 2026, endYear: 2027,
+  accounts: [
+    { id: 'trad401k', balance: 0, taxStatus: 'taxDeferred', waterfallRole: 'employerPlan' },
+    { id: 'roth401k', balance: 0, taxStatus: 'roth', waterfallRole: 'employerPlanRoth' },
+    { id: 'hsa1', balance: 0, taxStatus: 'hsa', hsaViaPayroll: true },
+    { id: 'rothira', balance: 0, taxStatus: 'roth', waterfallRole: 'rothIra' },
+  ],
+  returnRate: { default: 0 }, wageGrowth: { default: 0 },
+  income: { default: 80000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+  bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+  contributionWaterfallEnabled: true, waterfallBudget: { default: 30000 }, hsaCoverage: 'selfOnly',
+  waterfallOrder: 'bracketAware', waterfallRothBracketRate: 0.12,
+  ...overrides,
+});
+
+test('employerPlanRoth: bracketAware deducts to the ceiling, then the REST goes to the Roth side of the plan', () => {
+  // Tier 1 match: 4% * 80000 = 3200 gross, netCost 3200*0.78 = 2496 -> budget 27504, before 60700.
+  //   electiveRoom = 24500 - 3200 = 21300.
+  // Tier 2 HSA: 4400 gross, netCost 4400*0.9235 - 968 = 3095.4 -> budget 24408.6, before 56300.
+  // Tier 3 Traditional-to-ceiling: aboveCeiling = 56300 - 50400 = 5900 (well under electiveRoom),
+  //   netCost 5900*0.78 = 4602 -> budget 19806.6, before EXACTLY 50400. electiveRoom = 15400.
+  // Tier 4 Roth IRA: 7500 limit, no phase-out at 80k -> budget 12306.6.
+  // Tier 5 Roth side of the plan: min(electiveRoom 15400, budget 12306.6) = 12306.6 -> budget 0.
+  // Tier 6 Traditional spillover: nothing left to spend.
+  const y = row(projectAccumulation(bothSidesBase()), 2027);
+  approx(y.accounts.trad401k.contribution, 3200 + 5900, 1e-3);
+  approx(y.accounts.hsa1.contribution, 4400);
+  approx(y.accounts.rothira.contribution, 7500);
+  approx(y.accounts.roth401k.contribution, 12306.6, 1e-3);
+  approx(y.totals.taxableIncome, 50400, 1e-3); // deducted to the ceiling, not past it
+  // The Roth side is NOT capped at the Roth IRA limit -- that's the whole point of the role.
+  assert.ok(y.accounts.roth401k.contribution > iraContributionLimit(43, { iraLimit: taxTables.years['2026'].iraLimits }),
+    'the Roth side of the plan must use the elective-deferral limit, not the IRA limit');
+});
+
+test('employerPlanRoth: both sides share ONE elective-deferral limit, never one each', () => {
+  // Budget 60000: enough that tier 5 is capped by what's LEFT of the shared limit, not by budget.
+  const y = row(projectAccumulation(bothSidesBase({ waterfallBudget: { default: 60000 } })), 2027);
+  const employeeTotal = y.accounts.trad401k.contribution + y.accounts.roth401k.contribution;
+  approx(employeeTotal, 24500, 1e-3); // exactly the 2026 elective deferral limit, across both sides
+  approx(y.accounts.trad401k.contribution, 3200 + 5900, 1e-3);
+  approx(y.accounts.roth401k.contribution, 24500 - 3200 - 5900, 1e-3);
+  approx(y.accounts.rothira.contribution, 7500); // its own separate limit, unaffected
+});
+
+test('employerPlanRoth is never swept into the Roth IRA tier (which would cap it at the IRA limit)', () => {
+  // Same setup with NO separate Roth IRA account: the plan's Roth side must still be funded from
+  // the elective limit rather than being picked up as "the first roth account" at the IRA limit.
+  const params = bothSidesBase({ waterfallBudget: { default: 60000 } });
+  params.accounts = params.accounts.filter((a) => a.id !== 'rothira');
+  const y = row(projectAccumulation(params), 2027);
+  approx(y.accounts.trad401k.contribution + y.accounts.roth401k.contribution, 24500, 1e-3);
+  approx(y.accounts.roth401k.contribution, 24500 - 3200 - 5900, 1e-3);
+});
+
+test('employerPlanRoth under the STANDARD order: funded after the Roth IRA, before extra Traditional', () => {
+  const y = row(projectAccumulation(bothSidesBase({ waterfallOrder: 'standard', waterfallBudget: { default: 60000 } })), 2027);
+  // No bracket tier here, so after match + HSA + Roth IRA the Roth side takes the rest of the
+  // shared limit, and only then would the Traditional spillover get anything.
+  approx(y.accounts.rothira.contribution, 7500);
+  approx(y.accounts.trad401k.contribution + y.accounts.roth401k.contribution, 24500, 1e-3);
+  approx(y.accounts.trad401k.contribution, 3200, 1e-3); // the match tier only
+});

@@ -785,6 +785,7 @@ export async function mount(root) {
               plan.waterfallOrder === 'bracketAware'
                 ? h('div', {},
                     waterfallRothBracketRow(),
+                    h('p', { class: 'muted small' }, "If your workplace plan offers both a Traditional and a Roth election, mark the Traditional account \"Employer plan\" and the Roth one \"Employer plan — Roth side\" in the accounts table: they then share one elective-deferral limit (as the IRS actually treats them), and whatever's left after the bracket target is reached goes to the Roth side at the full plan limit rather than the much smaller Roth IRA one."),
                     h('p', { class: 'muted small' }, "Same budget, different split: instead of sending tier 3 to a Roth IRA no matter what rate those dollars would face, this contributes Traditional first — but only enough to pull your taxable income down to the top of the bracket you pick — then puts the rest in Roth. The reasoning is that deducting a dollar taxed at 22% or 24% is worth more than deducting one taxed at 12%, so the deduction goes to your expensive dollars and the cheap ones go to Roth. In a year your income already sits at or below that bracket, no extra Traditional is funded at all and everything after the HSA goes to Roth. Your 401(k) elective-deferral limit still caps it, and anything past the Roth IRA limit spills back to the 401(k) as usual."),
                   )
                 : null,
