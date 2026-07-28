@@ -275,3 +275,81 @@ test('a non-waterfall account keeps using its own independent contributions sett
   assert.ok(y.accounts.ira2.contribution > 2000, 'ira2 must also gross up above its $2,000 net cost');
   approx(y.totals.taxableIncome, runningAfterTier1 - y.accounts.ira2.contribution, 1e-3);
 });
+
+// --- 'bracketAware' order (2026-07-27) --------------------------------------
+// match -> HSA max -> Traditional only down to the top of a chosen bracket -> Roth for the rest.
+// Same 2026 single figures throughout: stdDeduction 16100, brackets 12400@10% / 50400@12% /
+// 105700@22%, so a 0.12 rothBracketRate means "deduct until taxable income hits 50400".
+
+const bracketAwareBase = (overrides = {}) => ({
+  startYear: 2026, endYear: 2027,
+  accounts: [
+    { id: 'trad401k', balance: 0, taxStatus: 'taxDeferred' },
+    { id: 'hsa1', balance: 0, taxStatus: 'hsa', hsaViaPayroll: true },
+    { id: 'rothira', balance: 0, taxStatus: 'roth' },
+  ],
+  returnRate: { default: 0 }, wageGrowth: { default: 0 },
+  income: { default: 100000 }, filingStatus: 'single', taxTables, anchorYear: 2026,
+  bracketIndexingRate: { default: 0 }, standardDeductionIndexingRate: { default: 0 },
+  contributionWaterfallEnabled: true, contributionMode: 'percentOfIncome',
+  waterfallBudget: { default: 0.15 }, hsaCoverage: 'selfOnly',
+  waterfallOrder: 'bracketAware', waterfallRothBracketRate: 0.12,
+  ...overrides,
+});
+
+test('bracketAware: a 22%-bracket income sends the whole post-HSA budget to Traditional, not Roth', () => {
+  // before=83900. Tier 1 match: 4000 gross, netCost 4000*0.78=3120 -> budget 11880, before 79900.
+  // Tier 2 HSA: 4400 gross, netCost 4400*0.9235 - 4400*0.22 = 3095.4 -> budget 8784.6, before 75500.
+  // Tier 3 Traditional-to-ceiling: aboveCeiling = 75500-50400 = 25100, electiveRoom = 24500-4000 =
+  //   20500 -> desired 20500, but its full net cost (20500*0.78=15990) exceeds the 8784.6 budget,
+  //   so it funds what the budget grosses up to: 8784.6/0.78 = 11262.307692 (all within the 22%
+  //   band, which runs from 50400 up to 105700). Budget exhausted -> Roth gets nothing.
+  const y = row(projectAccumulation(bracketAwareBase()), 2027);
+  approx(y.accounts.trad401k.contribution, 4000 + 11262.307692, 1e-3);
+  approx(y.accounts.rothira.contribution, 0);
+  approx(y.accounts.hsa1.contribution, 4400);
+  approx(y.totals.taxableIncome, 75500 - 11262.307692, 1e-3);
+});
+
+test('bracketAware: once income is deducted to the ceiling, the rest of the budget goes to Roth', () => {
+  // Same as above with a 30%-of-income budget. Tier 3's full 20500 (elective room) now fits:
+  // netCost 15990 <= 23784.6 -> before 55000, budget 7794.6. Tier 4 Roth IRA takes its 7500 limit.
+  // Note before (55000) stops ABOVE the 50400 ceiling here: the elective-deferral limit ran out
+  // first, which is the cap binding, not the bracket.
+  const y = row(projectAccumulation(bracketAwareBase({ waterfallBudget: { default: 0.30 } })), 2027);
+  approx(y.accounts.trad401k.contribution, 24500, 1e-3); // = the full 2026 elective deferral limit
+  approx(y.accounts.hsa1.contribution, 4400);
+  approx(y.accounts.rothira.contribution, 7500);
+  approx(y.totals.taxableIncome, 55000, 1e-3);
+});
+
+test('bracketAware: income already at/below the ceiling funds NO extra Traditional — it all goes Roth', () => {
+  // income=60000 -> before=43900, under the 50400 ceiling from the start.
+  // Tier 1 match: 2400 gross (4% of pay), netCost 2400*0.88 = 2112 -> budget 6888, before 41500.
+  // Tier 2 HSA: netCost 4400*0.9235 - 4400*0.12 = 3535.4 -> budget 3352.6, before 37100.
+  // Tier 3: aboveCeiling = max(0, 37100 - 50400) = 0 -> skipped entirely. Tier 4 Roth: 3352.6.
+  const y = row(projectAccumulation(bracketAwareBase({ income: { default: 60000 } })), 2027);
+  approx(y.accounts.trad401k.contribution, 2400, 1e-3); // the match tier only
+  approx(y.accounts.rothira.contribution, 3352.6, 1e-3);
+  approx(y.totals.taxableIncome, 37100, 1e-3);
+});
+
+test('bracketAware vs standard: same budget, same accounts, more of it lands pre-tax at 22%', () => {
+  const standard = row(projectAccumulation(bracketAwareBase({ waterfallOrder: 'standard' })), 2027);
+  const aware = row(projectAccumulation(bracketAwareBase()), 2027);
+  approx(standard.totals.contribution + standard.totals.tax, aware.totals.contribution + aware.totals.tax, 5000);
+  assert.ok(aware.accounts.trad401k.contribution > standard.accounts.trad401k.contribution,
+    `pre-tax should be larger under bracketAware (${aware.accounts.trad401k.contribution} vs ${standard.accounts.trad401k.contribution})`);
+  assert.ok(aware.totals.taxableIncome < standard.totals.taxableIncome, 'and taxable income lower');
+  assert.ok(aware.totals.tax < standard.totals.tax, 'so this year\'s tax bill is lower');
+});
+
+test('REGRESSION: omitting waterfallOrder is exactly the standard order', () => {
+  const omitted = projectAccumulation(bracketAwareBase({ waterfallOrder: undefined, waterfallRothBracketRate: undefined }));
+  const explicit = projectAccumulation(bracketAwareBase({ waterfallOrder: 'standard' }));
+  // years[0] is the inert baseline row (no contributions computed at all), hence the || 0.
+  for (let i = 0; i < omitted.years.length; i++) {
+    approx(omitted.years[i].totals.contribution || 0, explicit.years[i].totals.contribution || 0, 1e-9);
+    approx(omitted.years[i].totals.taxableIncome || 0, explicit.years[i].totals.taxableIncome || 0, 1e-9);
+  }
+});

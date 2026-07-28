@@ -147,6 +147,23 @@ engine/               pure calculation modules (unit-tested)
                          unconditional tax-law fact, not a toggle). Each account row also carries
                          `netCost` (the take-home figure, informational — undefined for roth/
                          taxable/cash, which have no gross-up to report).
+                         Waterfall order 'bracketAware' (2026-07-27): an alternative tier order to
+                         the 'standard' one below, selected via `waterfallOrder` +
+                         `waterfallRothBracketRate` — match, HSA max, then TRADITIONAL sized as
+                         exactly `runningBefore - bracketTopForRate(rate)` (only the income ABOVE
+                         the chosen bracket's top gets deducted), then Roth IRA, then the usual
+                         employer-plan spillover. The accumulation-side mirror of decumulation's
+                         bracketFill: it exists because the standard order routes tier-3 dollars to
+                         Roth regardless of the rate they'd otherwise face, and a deduction is
+                         worth more against 22%/24% dollars than 12% ones. Tiers 1-2 shrink
+                         `runningBefore` first, so the match/HSA deductions legitimately count
+                         toward reaching the ceiling. The pre-tax target is the employer-plan
+                         account when it's `taxDeferred` (capped by remaining elective-deferral
+                         room), else the first other eligible taxDeferred account, capped by the
+                         IRA limit — the same flavor of assumption tier 3 already makes about
+                         "first roth = a Roth IRA". Income already at/below the ceiling ⇒ this tier
+                         funds $0 and everything after HSA goes to Roth. Omit `order` (or pass
+                         'standard') ⇒ byte-identical to prior behavior.
                          Phase 6.7, the contribution waterfall (DONE): the standard "investment
                          order" — Traditional up to the employer match, then HSA to its max, then
                          Roth IRA to its (income-phased-out) limit, then back to Traditional for
@@ -221,7 +238,12 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          fresh default rather than reinterpreting the same stored number under the
                          other mode's totally different meaning (a $10,000 dollar-mode value would
                          otherwise read as 1,000,000% if left in place).
-                         Contribution waterfall (Phase 6.7) controls: `plan.contributionWaterfallEnabled`
+                         Contribution waterfall (Phase 6.7) controls: `plan.waterfallOrder`
+                         ('standard' | 'bracketAware', 2026-07-27) + `plan.waterfallRothBracketRate`
+                         (shown only for 'bracketAware'; `waterfallRothBracketRow()` is the
+                         contribution-side twin of `bracketFillRateRow()`, sharing
+                         `bracketFillOptions()` so both pickers always offer rates the engine can
+                         actually resolve), `plan.contributionWaterfallEnabled`
                          + a new household-level `assumptions.waterfallBudget` setting (read the
                          SAME dollar/percent way as `contributions`, via the same contributionMode
                          toggle) + `plan.matchRate`/`plan.matchCapPercent` (plain percentFieldRow

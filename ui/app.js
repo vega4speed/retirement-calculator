@@ -86,6 +86,8 @@ export async function mount(root) {
     rothConversionsEnabled: false, // 'bracketFill' only: also convert unused room to Roth
     contributionMode: 'dollar',  // 'dollar' | 'percentOfIncome' -- see engine/project.js's docs
     contributionWaterfallEnabled: false, // "standard investment order" -- see engine/project.js's computeContributionWaterfall docs
+    waterfallOrder: 'standard',   // 'standard' | 'bracketAware' -- which tier order the waterfall runs
+    waterfallRothBracketRate: 0.12, // 'bracketAware' only: deduct down to this bracket's top, then Roth
     matchRate: 1.0,               // waterfall only: fraction of the tier-1 employee contribution matched
     matchCapPercent: 0.04,        // waterfall only: fraction of income eligible for match
     medicalIncludedInSpending: false, // false: medical is on TOP of the spending target
@@ -321,6 +323,8 @@ export async function mount(root) {
     plan.rothConversionsEnabled = false;
     plan.contributionMode = 'dollar';
     plan.contributionWaterfallEnabled = false;
+    plan.waterfallOrder = 'standard';
+    plan.waterfallRothBracketRate = 0.12;
     plan.matchRate = 1.0;
     plan.matchCapPercent = 0.04;
     plan.medicalIncludedInSpending = false;
@@ -556,6 +560,18 @@ export async function mount(root) {
       (v) => { plan.bracketFillRate = Number(v); });
   }
 
+  // The contribution-side twin of bracketFillRateRow: which bracket's top Traditional
+  // contributions deduct DOWN to before the waterfall switches to Roth. Same option list (the
+  // filing status's own capped brackets), same engine helper (tax.bracketTopForRate).
+  function waterfallRothBracketRow() {
+    const rates = bracketFillOptions();
+    if (!rates.length) return null;
+    if (!rates.includes(plan.waterfallRothBracketRate)) plan.waterfallRothBracketRate = rates[0];
+    return selectRow('Use Roth at or below bracket', String(plan.waterfallRothBracketRate),
+      rates.map((r) => [String(r), `${(r * 100).toFixed(0)}%`]),
+      (v) => { plan.waterfallRothBracketRate = Number(v); });
+  }
+
   // Live "here's what that produces" readout for the 'maxSustainable' strategy — no input to
   // type, the amount is solved from every other assumption already set (design doc §9: "what's
   // the safe real spending it does support?"). This is a PERSISTENT element (like projectionView
@@ -762,11 +778,24 @@ export async function mount(root) {
           : null,
         plan.contributionWaterfallEnabled
           ? h('div', {},
+              selectRow('Order', plan.waterfallOrder, [
+                ['standard', 'Standard (match → HSA → Roth IRA → back to Traditional)'],
+                ['bracketAware', 'Tax-bracket-aware (match → HSA → Traditional down to a bracket → Roth)'],
+              ], (v) => { plan.waterfallOrder = v; }),
+              plan.waterfallOrder === 'bracketAware'
+                ? h('div', {},
+                    waterfallRothBracketRow(),
+                    h('p', { class: 'muted small' }, "Same budget, different split: instead of sending tier 3 to a Roth IRA no matter what rate those dollars would face, this contributes Traditional first — but only enough to pull your taxable income down to the top of the bracket you pick — then puts the rest in Roth. The reasoning is that deducting a dollar taxed at 22% or 24% is worth more than deducting one taxed at 12%, so the deduction goes to your expensive dollars and the cheap ones go to Roth. In a year your income already sits at or below that bracket, no extra Traditional is funded at all and everything after the HSA goes to Roth. Your 401(k) elective-deferral limit still caps it, and anything past the Roth IRA limit spills back to the 401(k) as usual."),
+                  )
+                : null,
               settingRow('waterfallBudget', 'Waterfall budget', plan.contributionMode === 'percentOfIncome' ? 'percent' : 'money', false),
               percentFieldRow('Employer match rate', () => plan.matchRate, (v) => { plan.matchRate = v; }, 'e.g. 100% = dollar-for-dollar match'),
               percentFieldRow('Match cap (% of pay)', () => plan.matchCapPercent, (v) => { plan.matchCapPercent = v; }, 'e.g. 4% = matched up to 4% of your pay'),
               h('p', { class: 'muted small' },
-                "Fills one budget across accounts in priority order: your employer plan up to the match, then your HSA to its max, then your Roth IRA up to its limit (phased out at higher incomes), then back to the employer plan for whatever's left of the budget — each capped by its own real IRS limit. By default that's the first Traditional-type account (match) / first HSA / first Roth account (Roth IRA limit) in the order you entered them, and if you have more than one account of a given type only the first participates — the rest keep using their own \"Annual contribution\" setting above. Set a specific account's \"Waterfall role\" (in the accounts table above) to override this: mark a Roth 401(k) as \"Employer plan\" to use the bigger 401(k) limit instead of the small Roth IRA one, and — if your match lands in a separate Traditional account rather than your Roth 401(k), as most real plans do — mark that account \"Employer match lands here.\" The employer match is free money on top — it doesn't come out of your budget."),
+                (plan.waterfallOrder === 'bracketAware'
+                  ? "Fills one budget across accounts in the order above, each tier capped by its own real IRS limit. By default that's"
+                  : "Fills one budget across accounts in priority order: your employer plan up to the match, then your HSA to its max, then your Roth IRA up to its limit (phased out at higher incomes), then back to the employer plan for whatever's left of the budget — each capped by its own real IRS limit. By default that's")
+                  + " the first Traditional-type account (match) / first HSA / first Roth account (Roth IRA limit) in the order you entered them, and if you have more than one account of a given type only the first participates — the rest keep using their own \"Annual contribution\" setting above. Set a specific account's \"Waterfall role\" (in the accounts table above) to override this: mark a Roth 401(k) as \"Employer plan\" to use the bigger 401(k) limit instead of the small Roth IRA one, and — if your match lands in a separate Traditional account rather than your Roth 401(k), as most real plans do — mark that account \"Employer match lands here.\" The employer match is free money on top — it doesn't come out of your budget."),
             )
           : null,
         settingRow('inflation', 'Inflation', 'percent', false),

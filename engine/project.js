@@ -94,6 +94,26 @@ function rowTotals(accounts, extraKeys) {
  * wages to begin with, so it never touched your taxable income (unlike your own elective
  * deferral, which reduces Box 1 wages).
  *
+ * ORDER 'bracketAware' (2026-07-27), an alternative to the 'standard' order above: match, HSA max,
+ * then TRADITIONAL only as far as it takes to pull taxable income down to the top of a chosen
+ * ordinary bracket, then Roth for the rest. It's the accumulation-side mirror of decumulation's
+ * `bracketFill` sequencing, and it exists because the standard order routes tier-3 dollars to Roth
+ * regardless of what rate they'd otherwise be taxed at: deducting a dollar that would be taxed at
+ * 22% is worth more than deducting one taxed at 12%, so the deduction goes to the expensive
+ * dollars first and the cheap ones (at/below the ceiling) go to Roth instead. Tiers:
+ *   1. employer plan up to the match cap        (unchanged)
+ *   2. HSA to its max                           (unchanged)
+ *   3. Traditional, sized as `runningBefore - bracketTopForRate(p.rothBracketRate)` -- i.e. only
+ *      the income ABOVE the ceiling gets deducted; if income already sits at/below the ceiling
+ *      this tier funds $0 and everything falls through to Roth. Capped by the elective-deferral
+ *      limit when the pre-tax account IS the employer plan, else by the IRA limit (a taxDeferred
+ *      account that isn't the employer plan is assumed to be a Traditional IRA -- the same
+ *      flavor of assumption tier 4 already makes about "the first roth account is a Roth IRA").
+ *   4. Roth IRA to its (phase-out-adjusted) limit
+ *   5. back to the employer plan for anything left, as in the standard order
+ * Note tiers 1-2 shrink `runningBefore` before tier 3 measures it, so the match and HSA deductions
+ * legitimately count toward reaching the ceiling -- tier 3 only funds what's still needed.
+ *
  * @param {object} p
  * @param {{id:string, taxStatus:string, hsaViaPayroll?:boolean, waterfallRole?:string}[]} p.accounts
  * @param {number} p.income        this year's nominal income
@@ -108,6 +128,12 @@ function rowTotals(accounts, extraKeys) {
  * @param {number} [p.matchCapPercent]  fraction of income eligible for match; default DEFAULT_MATCH_CAP_PERCENT
  * @param {number} p.budget             this year's overall NET take-home budget
  * @param {object} p.fixedTables        tax-tables.json's `fixed` block (for hsaContributionLimit)
+ * @param {'standard'|'bracketAware'} [p.order] default 'standard'
+ * @param {number} [p.rothBracketRate]  'bracketAware' only: the ordinary bracket whose TOP is the
+ *   floor Traditional deducts down to (e.g. 0.12 ⇒ deduct until taxable income reaches the top of
+ *   the 12% bracket, then switch to Roth). Must match a rate in the year's ordinary brackets; no
+ *   match ⇒ no ceiling, i.e. Traditional absorbs the whole budget (bracketTopForRate's own
+ *   convention, same as decumulation's bracketFill).
  * @returns {{contributionByAccount:Record<string,number>, employerMatchByAccount:Record<string,number>, netContributionCostByAccount:Record<string,number>, claimedAccountIds:Set<string>, runningBefore:number}}
  */
 function computeContributionWaterfall(p) {
@@ -206,6 +232,32 @@ function computeContributionWaterfall(p) {
     const hsaViaPayroll = hsaAccount.hsaViaPayroll !== false;
     const hsaCap = hsaContributionLimit(hsaCoverage, age, yearTable, fixedTables);
     contributionByAccount[hsaAccount.id] = trackNetCost(hsaAccount.id, () => fundTier(hsaCap, hsaViaPayroll ? ficaRate : 0));
+  }
+
+  // Tier 3, 'bracketAware' only: Traditional, but ONLY down to the chosen bracket's top -- the
+  // dollars above the ceiling are the expensive ones worth deducting; the rest go to Roth below.
+  // The pre-tax target is the employer plan when that account is itself Traditional (capped by
+  // what's left of the elective-deferral limit), else the first other taxDeferred account, assumed
+  // to be a Traditional IRA and capped accordingly.
+  if (p.order === 'bracketAware') {
+    const viaEmployerPlan = employerPlanAccount?.taxStatus === 'taxDeferred';
+    const preTaxAccount = viaEmployerPlan
+      ? employerPlanAccount
+      : accounts.find((a) => a.taxStatus === 'taxDeferred' && fallbackEligible(a));
+    if (preTaxAccount) {
+      const ceiling = p.rothBracketRate != null ? bracketTopForRate(p.rothBracketRate, brackets) : Infinity;
+      // Infinity ceiling (no bracket picked, or a rate matching no bracket) ⇒ nothing is "cheap",
+      // so Traditional takes whatever the budget allows -- the room cap below is what bounds it.
+      const aboveCeiling = ceiling === Infinity ? Infinity : Math.max(0, runningBefore - ceiling);
+      const room = viaEmployerPlan ? electiveRoom : iraContributionLimit(age, yearTable);
+      const desired = Math.min(aboveCeiling, room);
+      if (desired > 1e-9) {
+        claimedAccountIds.add(preTaxAccount.id);
+        const actual = trackNetCost(preTaxAccount.id, () => fundTier(desired, 0));
+        contributionByAccount[preTaxAccount.id] = (contributionByAccount[preTaxAccount.id] || 0) + actual;
+        if (viaEmployerPlan) electiveRoom -= actual;
+      }
+    }
   }
 
   if (rothIraAccount) {
@@ -419,6 +471,7 @@ export function projectAccumulation(p) {
           accounts, income, age, runningBefore, yearTable, fixedTables: p.taxTables.fixed,
           filingStatus: p.filingStatus, ficaRate, hsaCoverage,
           matchRate: p.matchRate, matchCapPercent: p.matchCapPercent, budget,
+          order: p.waterfallOrder, rothBracketRate: p.waterfallRothBracketRate,
         });
         Object.assign(contributionByAccount, wf.contributionByAccount);
         Object.assign(employerMatchByAccount, wf.employerMatchByAccount);
@@ -1224,6 +1277,10 @@ export function projectDecumulation(p) {
  * @param {number} [p.ficaRate] accumulation only; default 0.0765
  * @param {boolean} [p.contributionWaterfallEnabled] accumulation only (Phase 6.7) — see
  *   computeContributionWaterfall's docs
+ * @param {'standard'|'bracketAware'} [p.waterfallOrder] accumulation only; default 'standard' —
+ *   see computeContributionWaterfall's docs for the tier order each one runs
+ * @param {number} [p.waterfallRothBracketRate] accumulation only, 'bracketAware' order only: the
+ *   ordinary bracket whose top Traditional contributions deduct down to before Roth takes over
  * @param {object} [p.waterfallBudget] accumulation only, household-level setting (not per-account)
  *   read the same way as p.contributions per p.contributionMode; the waterfall's overall take-home
  *   budget for the year
@@ -1302,6 +1359,7 @@ export function project(p) {
     bracketIndexingRate: p.bracketIndexingRate, standardDeductionIndexingRate: p.standardDeductionIndexingRate,
     stateTaxRate: p.stateTaxRate, birthYear: p.birthYear, hsaCoverage: p.hsaCoverage, ficaRate: p.ficaRate,
     contributionWaterfallEnabled: p.contributionWaterfallEnabled, waterfallBudget: p.waterfallBudget,
+    waterfallOrder: p.waterfallOrder, waterfallRothBracketRate: p.waterfallRothBracketRate,
     matchRate: p.matchRate, matchCapPercent: p.matchCapPercent,
     rothConversionsEnabled: p.rothConversionsEnabled, bracketFillRate: p.bracketFillRate,
   });

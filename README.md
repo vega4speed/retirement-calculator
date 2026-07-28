@@ -148,6 +148,15 @@ overall budget (a flat $ or a % of income) — the calculator fills each step in
 that step's real IRS limit, before moving to the next: 401(k) up to your match, HSA to its real
 max, Roth IRA up to its limit (reduced or eliminated at higher incomes, per the real IRS
 phase-out), then back to the 401(k) for whatever's left, capped by its own real annual limit.
+A second order is available for the same budget: **tax-bracket-aware** — match, HSA max, then
+Traditional but *only* enough of it to pull your taxable income down to the top of a bracket you
+pick, then Roth for the rest. The standard order sends tier-3 dollars to a Roth IRA no matter what
+rate they'd otherwise be taxed at; this one puts the deduction against your most expensive dollars
+first and leaves the cheap ones (at or below your chosen bracket) for Roth. In a year your income
+already sits at or below that bracket, no extra Traditional is funded and everything after the HSA
+goes to Roth. Your 401(k) elective-deferral limit still caps it, and anything past the Roth IRA
+limit spills back to the 401(k) as before.
+
 Employer match is modeled separately as free money on top of your own contribution, shown as its
 own stat tile and table column. During your working years the projection table breaks each year's
 contributions down by tax treatment — pre-tax, Roth, and HSA columns alongside the total (expand

@@ -64,6 +64,10 @@ function paramsFor(state, taxTables) {
       // same way as the rest of tax mode too.
       contributionWaterfallEnabled: !!plan.contributionWaterfallEnabled,
       waterfallBudget: assumptions.waterfallBudget,
+      waterfallOrder: plan.waterfallOrder,
+      // Only meaningful to the 'bracketAware' order; passed only then, same shape as
+      // bracketFillRate above (undefined for every other selection).
+      waterfallRothBracketRate: plan.waterfallOrder === 'bracketAware' ? plan.waterfallRothBracketRate : undefined,
       matchRate: plan.matchRate,
       matchCapPercent: plan.matchCapPercent,
       // Social Security (Phase 5) is opt-in within tax mode: needs earnings + claiming age.
