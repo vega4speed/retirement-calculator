@@ -283,15 +283,25 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          accumulation-phase rows now show income/tax/marginal/effective + any
                          conversion too, not just the contribution) + a table (both phases, sticky
                          headers, an age column when birthYear is known, a Roth-conversion column
-                         and an Employer-match column when relevant, PLUS one column per account
-                         during accumulation years — NOT filtered to "ever funded" (a filtered-out
-                         account silently disappearing from the table was confusing: you can't
-                         tell "unsupported here" from "genuinely $0" without the column to look
-                         at, the exact bug behind a user report of a missing HSA column) — each
-                         cell showing that account's own contribution with any employer match as
-                         a small sub-line; requires `opts.getAccountLabel(id)` from the caller
-                         (app.js supplies `snapshot.accounts.find(...).label || id`) so headers
-                         show real names, not raw account ids. Also: an "Income" column
+                         and an Employer-match column when relevant, PLUS accumulation-year
+                         contribution columns grouped BY TAX TREATMENT — Pre-tax / Roth / HSA
+                         (2026-07-27; these replaced one-column-per-account, which pushed the
+                         columns that matter off the right edge once a household had several
+                         accounts — the exact per-account split already lives in the row's expanded
+                         panel, so the table only needs the tax-treatment summary the Total
+                         contribution column sits next to). A group's column appears whenever an
+                         account of that status EXISTS, NOT filtered to "ever funded" (a
+                         filtered-out account silently disappearing from the table was confusing:
+                         you can't tell "unsupported here" from "genuinely $0" without the column
+                         to look at, the exact bug behind a user report of a missing HSA column) —
+                         each cell sums that group's contributions (%-of-income from summed
+                         netCost) with any employer match as a small sub-line; requires
+                         `opts.getAccountTaxStatus(id)` from the caller (app.js supplies
+                         `snapshot.accounts.find(...).taxStatus`), which REPLACED the
+                         `getAccountLabel` opt the per-account headers needed. Column order is
+                         Year / Age / Phase (Phase moved right of Age 2026-07-27, which also makes
+                         the three pinned columns contiguous with the sticky-left offsets). Also:
+                         an "Income" column
                          (`totals.grossIncome`, the SAME field both phases' lifetime aggregates
                          already use — reused here rather than re-derived) with %-of-income
                          annotations on Total contribution and Tax (a ratio, so invariant to the
@@ -412,10 +422,10 @@ SECURE 2.0's age-60-63 enhanced catch-up, and the Roth IRA income phase-out) bef
 to the next. Employer match is modeled as a simple single-tier formula (rate + cap % of pay) and
 tracked as free money, separate from your own contribution.
 
-**Per-account table columns (2026-07-24):** the projection table now shows a column per account
-during the accumulation years (contribution + any employer match, only for accounts that ever
-actually get funded), so you can see exactly where a given year's money went without doing the
-math by hand — added while diagnosing a user-reported "this final balance looks way too high"
+**Per-account table columns (2026-07-24; SUPERSEDED 2026-07-27 by the by-tax-treatment grouping —
+see projection-view.js above):** the projection table showed a column per account during the
+accumulation years (contribution + any employer match), so you could see exactly where a given
+year's money went without doing the math by hand — added while diagnosing a user-reported "this final balance looks way too high"
 question. That diagnosis: reproducing the exact reported inputs (3 accounts, 10% return, 46-year
 horizon, 15%-of-income waterfall) against the code as of this commit produced a real, internally-
 consistent, hand-verified result — NOT the much larger figure originally reported. Employer match

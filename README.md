@@ -149,11 +149,11 @@ that step's real IRS limit, before moving to the next: 401(k) up to your match, 
 max, Roth IRA up to its limit (reduced or eliminated at higher incomes, per the real IRS
 phase-out), then back to the 401(k) for whatever's left, capped by its own real annual limit.
 Employer match is modeled separately as free money on top of your own contribution, shown as its
-own stat tile and table column. The projection table also shows a column per account during your
-working years (contribution + any match), an Income column, and %-of-income next to your
-Total-contribution and Tax figures — so you can see exactly where each year's money went without
-doing the math by hand. A toggle switches the whole table between nominal dollars and today's
-dollars.
+own stat tile and table column. During your working years the projection table breaks each year's
+contributions down by tax treatment — pre-tax, Roth, and HSA columns alongside the total (expand
+any row for the exact per-account split) — plus an Income column and %-of-income next to your
+Total-contribution and Tax figures, so you can see where each year's money went without doing the
+math by hand. A toggle switches the whole table between nominal dollars and today's dollars.
 
 **Health expenses in retirement.** Set an annual out-of-pocket medical figure (premiums,
 deductibles, dental/vision, eventual long-term care — the costs Medicare doesn't cover) with its

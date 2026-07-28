@@ -386,7 +386,6 @@ function buildTable(result, opts = {}) {
     withdrawalBreakdownFor, transitionsFor,
   } = opts;
   const isExpanded = (year) => expandedYears.has(year);
-  const getAccountLabel = opts.getAccountLabel || ((id) => id);
   const mode = opts.mode === 'real' ? 'real' : 'nominal'; // 'nominal' | 'real' (today's $)
 
   // Every dollar figure here is nominal-by-construction in the engine; "today's $" is always
@@ -398,16 +397,30 @@ function buildTable(result, opts = {}) {
   const val = (v, r) => (mode === 'real' ? (v || 0) / (r.cumulativeInflation || 1) : (v || 0));
   const pct = (v, income) => (income > 1e-9 ? ` (${((v / income) * 100).toFixed(1)}%)` : '');
 
-  // One column per account that exists during accumulation -- NOT filtered to "ever funded" (a
-  // filtered-out account silently vanishing from the table, rather than showing a column full of
-  // "—", was confusing: you can't tell "this account type isn't supported here" apart from "this
-  // account genuinely got $0" without the column existing to look at).
+  // Accumulation-year contributions, summarized BY TAX TREATMENT rather than one column per
+  // account -- with several accounts the per-account version pushed the columns that matter off
+  // the right edge, and the exact per-account split already lives in the row's expanded panel
+  // (contributionSectionContent). Three groups is what the tax code actually distinguishes here:
+  // deducted now (pre-tax), taxed now and never again (Roth), and never taxed either way (HSA).
+  // A group's column appears whenever an account of that status EXISTS -- deliberately not
+  // filtered to "ever funded", same reasoning as the per-account columns this replaced: a column
+  // full of "—" says "$0 went here", whereas no column at all is indistinguishable from "this
+  // app doesn't handle that account type."
+  const CONTRIBUTION_GROUPS = [
+    { key: 'taxDeferred', label: 'Pre-tax' },
+    { key: 'roth', label: 'Roth' },
+    { key: 'hsa', label: 'HSA' },
+  ];
   const accumRows = rows.filter((r) => r.phase !== 'decumulation');
-  const perAccountIds = accumRows.length ? Object.keys(accumRows[0].accounts) : [];
+  const allAccountIds = accumRows.length ? Object.keys(accumRows[0].accounts) : [];
+  const getAccountTaxStatus = opts.getAccountTaxStatus || (() => null);
+  const contributionGroups = CONTRIBUTION_GROUPS
+    .map((g) => ({ ...g, ids: allAccountIds.filter((id) => getAccountTaxStatus(id) === g.key) }))
+    .filter((g) => g.ids.length);
 
   // +1 for the leading expand-toggle column, kept separate from the other conditional columns.
   const colCount = 8 + (hasAge ? 1 : 0) + (hasTax ? 2 : 0) + (hasSS ? 1 : 0)
-    + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0) + (hasMedical ? 1 : 0) + perAccountIds.length;
+    + (hasConversion ? 1 : 0) + (hasMatch ? 1 : 0) + (hasMedical ? 1 : 0) + contributionGroups.length;
 
   const bodyRows = [];
   for (const r of rows) {
@@ -479,13 +492,19 @@ function buildTable(result, opts = {}) {
     // cost), so those fall back to the raw contribution figure, identical either way.
     const netBasis = (account, fallback) => (account?.netCost != null ? account.netCost : fallback);
 
-    const perAccountCells = perAccountIds.map((id) => {
-      const a = r.accounts[id];
-      const contribution = a?.contribution || 0;
-      const match = a?.employerMatch || 0;
+    const contributionGroupCells = contributionGroups.map((g) => {
+      let contribution = 0;
+      let match = 0;
+      let netCost = 0;
+      for (const id of g.ids) {
+        const a = r.accounts[id];
+        contribution += a?.contribution || 0;
+        match += a?.employerMatch || 0;
+        netCost += netBasis(a, a?.contribution || 0);
+      }
       if (contribution <= 1e-9 && match <= 1e-9) return h('td', { class: 'r' }, '—');
       return h('td', { class: 'r' },
-        h('div', {}, usdFull(val(contribution, r)), pct(netBasis(a, contribution), displayIncome)),
+        h('div', {}, usdFull(val(contribution, r)), pct(netCost, displayIncome)),
         match > 1e-9 ? h('div', { class: 'muted small' }, `+${usdFull(val(match, r))} match${pct(match, displayIncome)}`) : null,
       );
     });
@@ -493,13 +512,13 @@ function buildTable(result, opts = {}) {
     bodyRows.push(h('tr', {},
       toggleCell,
       h('td', { style: stickyStyle('year', false) }, r.year),
-      h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       hasAge ? h('td', { class: 'r', style: stickyStyle('age', false) }, r.age ?? '—') : null,
+      h('td', { class: 'muted small' }, r.phase === 'decumulation' ? 'retired' : 'working'),
       hasTax ? h('td', { class: 'r' }, displayIncome ? usdFull(val(displayIncome, r)) : '—') : null,
       hasSS ? h('td', { class: 'r' }, r.totals.socialSecurity ? usdFull(val(r.totals.socialSecurity, r)) : '—') : null,
       contributionCell,
       hasMatch ? h('td', { class: 'r' }, r.totals.employerMatch ? [usdFull(val(r.totals.employerMatch, r)), pct(r.totals.employerMatch, displayIncome)] : '—') : null,
-      ...perAccountCells,
+      ...contributionGroupCells,
       medicalCell,
       withdrawalCell,
       taxCell,
@@ -517,13 +536,13 @@ function buildTable(result, opts = {}) {
     h('thead', {}, h('tr', {},
       h('th', { style: stickyStyle('toggle', true) }, ''),
       h('th', { style: stickyStyle('year', true) }, 'Year'),
-      h('th', {}, 'Phase'),
       hasAge ? h('th', { class: 'r', style: stickyStyle('age', true) }, 'Age') : null,
+      h('th', {}, 'Phase'),
       hasTax ? h('th', { class: 'r' }, 'Income') : null,
       hasSS ? h('th', { class: 'r' }, 'Social Security') : null,
       h('th', { class: 'r' }, 'Total contribution'),
       hasMatch ? h('th', { class: 'r' }, 'Employer match') : null,
-      ...perAccountIds.map((id) => h('th', { class: 'r' }, getAccountLabel(id))),
+      ...contributionGroups.map((g) => h('th', { class: 'r' }, g.label)),
       hasMedical ? h('th', { class: 'r' }, 'Medical') : null,
       h('th', { class: 'r' }, 'Withdrawal'),
       hasTax ? h('th', { class: 'r' }, 'Tax') : null,
@@ -542,7 +561,10 @@ export function createProjectionView(opts = {}) {
   const contributionBreakdownFor = opts.contributionBreakdownFor;
   const withdrawalBreakdownFor = opts.withdrawalBreakdownFor;
   const transitionsFor = opts.transitionsFor;
-  const getAccountLabel = opts.getAccountLabel || ((id) => id);
+  // Per-account tax status, for grouping the accumulation contribution columns (buildTable); the
+  // per-account LABELS this replaced are no longer needed here — the account-level detail now
+  // lives only in the row's expanded panel, whose breakdowns carry their own labels.
+  const getAccountTaxStatus = opts.getAccountTaxStatus;
   let showTable = false;
   // One flag per YEAR, not per column -- a Set (rather than a single scalar) so more than one
   // row's panel can be open at once, but each row now has exactly one combined panel covering
@@ -625,7 +647,7 @@ export function createProjectionView(opts = {}) {
         contributionBreakdownFor,
         withdrawalBreakdownFor,
         transitionsFor,
-        getAccountLabel,
+        getAccountTaxStatus,
         mode: tableMode,
         onToggleExpand: (year) => {
           if (expandedYears.has(year)) expandedYears.delete(year); else expandedYears.add(year);

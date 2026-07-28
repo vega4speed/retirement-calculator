@@ -268,7 +268,7 @@ export async function mount(root) {
     contributionBreakdownFor,
     withdrawalBreakdownFor,
     transitionsFor,
-    getAccountLabel: (id) => snapshot.accounts.find((a) => a.id === id)?.label || id,
+    getAccountTaxStatus: (id) => snapshot.accounts.find((a) => a.id === id)?.taxStatus,
   });
 
   // Loads a saved scenario BACK into the live editor (overwriting it — the scenario itself stays
