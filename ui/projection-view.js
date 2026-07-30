@@ -25,24 +25,65 @@ function statTile(label, value, sub, accent) {
   );
 }
 
-function survivalTile(result) {
+function survivalTileDescriptor(result) {
   const depleted = result.firstDepletionYear != null;
   const label = 'Portfolio';
   if (result.horizonYear <= result.retirementYear) {
-    return statTile(label, '— not yet in retirement —', 'Set a horizon year past retirement', COL.muted);
+    return { id: 'survival', label, value: '— not yet in retirement —', sub: 'Set a horizon year past retirement', accent: COL.muted };
   }
   if (depleted) {
-    return h('div', { class: 'stat' },
-      h('div', { class: 'stat-label' }, label),
-      h('div', { class: 'stat-value', style: { color: COL.critical } }, '⚠ Runs out'),
-      h('div', { class: 'stat-sub' }, `in ${result.firstDepletionYear}, before the ${result.horizonYear} horizon`),
-    );
+    return {
+      id: 'survival', label, value: '⚠ Runs out',
+      sub: `in ${result.firstDepletionYear}, before the ${result.horizonYear} horizon`, accent: COL.critical,
+    };
   }
-  return h('div', { class: 'stat' },
-    h('div', { class: 'stat-label' }, label),
-    h('div', { class: 'stat-value', style: { color: COL.good } }, '✓ Lasts'),
-    h('div', { class: 'stat-sub' }, `through ${result.horizonYear}`),
-  );
+  return { id: 'survival', label, value: '✓ Lasts', sub: `through ${result.horizonYear}`, accent: COL.good };
+}
+
+/** The same headline figures the stats row shows, as plain {id, label, value, sub, accent}
+ * descriptors (value/sub already formatted strings) rather than DOM nodes — reused both to
+ * build the stats row below and by the pinned bar (pinned-bar.js), which lets the user mirror a
+ * chosen few of these at the top of the page without re-deriving any of this math itself. `id` is
+ * a stable key (independent of the label text, which can vary — e.g. 'headlineSpend' covers both
+ * the maxSustainable and fixed-spending labels) so a pinned selection survives a strategy change. */
+export function statTileDescriptors(r) {
+  if (!r || !r.years?.length) return [];
+  const retRow = r.years.find((y) => y.year === r.retirementYear) || r.years[0];
+  const endRow = r.years[r.years.length - 1];
+  const contributed = r.years.reduce((sn, y) => sn + (y.totals.contribution || 0), 0);
+  const employerMatchTotal = r.years.reduce((sn, y) => sn + (y.totals.employerMatch || 0), 0);
+  const { decumulationTax, decumulationEffectiveTaxRate, lifetimeTax, lifetimeEffectiveTaxRate, lifetimeRothConversions: lifetimeConversions } = r;
+  const { lifetimeMedical = 0, lifetimeMedicalFromHsa = 0 } = r;
+  const yrs = r.retirementYear - r.baseYear;
+
+  return [
+    survivalTileDescriptor(r),
+    { id: 'atRetirement', label: "At retirement · today's dollars", value: usd(retRow.real.endBalance), sub: `${r.retirementYear} · in ${yrs} yr${yrs === 1 ? '' : 's'}`, accent: COL.real },
+    { id: 'totalContributed', label: 'Total contributed', value: usd(contributed), sub: 'over the accumulation years' },
+    employerMatchTotal > 0
+      ? { id: 'employerMatch', label: 'Employer match', value: usd(employerMatchTotal), sub: 'free money, on top of what you contributed' } : null,
+    // Under 'maxSustainable', ending balance is always ~$0 by construction (that's what the
+    // solver targets) — showing it as a headline number is misleading, not just uninteresting.
+    // The actually meaningful number for this strategy is the spend it solved for.
+    r.solvedSpending != null
+      ? { id: 'headlineSpend', label: "Annual spend · today's $", value: usd(r.solvedSpending), sub: 'maximum sustainable through ' + r.horizonYear, accent: COL.real }
+      : { id: 'headlineSpend', label: "End of plan · today's dollars", value: usd(endRow.real.endBalance), sub: `${r.horizonYear}`, accent: endRow.real.endBalance > 0 ? COL.real : COL.critical },
+    decumulationTax > 0
+      ? { id: 'lifetimeTax', label: 'Lifetime tax in retirement', value: usd(decumulationTax), sub: 'nominal, federal + state' } : null,
+    decumulationTax > 0
+      ? { id: 'effectiveTaxRate', label: 'Lifetime effective tax rate', value: `${(decumulationEffectiveTaxRate * 100).toFixed(1)}%`, sub: 'total tax ÷ total gross income, in retirement' } : null,
+    lifetimeTax > decumulationTax
+      ? { id: 'totalTax', label: 'Total tax, working + retired', value: usd(lifetimeTax), sub: `${(lifetimeEffectiveTaxRate * 100).toFixed(1)}% effective, your whole plan` } : null,
+    lifetimeConversions > 0
+      ? { id: 'rothConverted', label: 'Converted to Roth', value: usd(lifetimeConversions), sub: 'nominal, working + retired years' } : null,
+    lifetimeMedical > 0
+      ? {
+          id: 'lifetimeMedical', label: 'Lifetime medical costs', value: usd(lifetimeMedical),
+          sub: lifetimeMedicalFromHsa > 0
+            ? `nominal · ${usd(lifetimeMedicalFromHsa)} of it paid tax-free from your HSA`
+            : 'nominal, in retirement',
+        } : null,
+  ].filter(Boolean);
 }
 
 function buildChart(result) {
@@ -251,7 +292,9 @@ function contributionSectionContent(breakdown, toDisplay) {
       h('th', {}, 'Account'), h('th', { class: 'r' }, 'Gross'), h('th', { class: 'r' }, 'Tax saved'),
       h('th', { class: 'r' }, 'FICA saved'), h('th', { class: 'r' }, 'Net cost'))),
     h('tbody', {}, ...breakdown.accounts.map((a) => h('tr', {},
-      h('td', {}, a.label),
+      h('td', {}, a.label, a.catchUpAmount > 0.5
+        ? h('div', { class: 'muted small' }, `includes ${usdFull(toDisplay(a.catchUpAmount))} age ${a.catchUpAge}+ catch-up`)
+        : null),
       h('td', { class: 'r' }, usdFull(toDisplay(a.gross))),
       h('td', { class: 'r' }, a.taxSaved > 0.5 ? usdFull(toDisplay(a.taxSaved)) : '—'),
       h('td', { class: 'r' }, a.ficaSaved > 0.5 ? usdFull(toDisplay(a.ficaSaved)) : '—'),
@@ -592,45 +635,9 @@ export function createProjectionView(opts = {}) {
     clear(el);
     if (!current) { el.append(h('p', { class: 'muted' }, 'Add at least one account to see a projection.')); window.scrollTo(0, scrollY); return; }
     const r = current;
-    const startTotal = r.years[0].totals.endBalance;
-    const retRow = r.years.find((y) => y.year === r.retirementYear) || r.years[0];
-    const endRow = r.years[r.years.length - 1];
-    const contributed = r.years.reduce((sn, y) => sn + (y.totals.contribution || 0), 0);
-    const employerMatchTotal = r.years.reduce((sn, y) => sn + (y.totals.employerMatch || 0), 0);
-    // Tax/effective-rate/conversion aggregates are computed ONCE in project() (see its docs) and
-    // reused here rather than re-derived — the scenario-comparison table (scenarios.js) uses the
-    // exact same fields, so both are guaranteed consistent by construction, not by convention.
-    // decumulationTax/-EffectiveTaxRate stay scoped to "in retirement" (this tile's label); the
-    // WHOLE-PLAN lifetime figures (which now also include working-years tax, Phase 6.5) get their
-    // own tile below so neither number silently absorbs the other.
-    const { decumulationTax, decumulationEffectiveTaxRate, lifetimeTax, lifetimeEffectiveTaxRate, lifetimeRothConversions: lifetimeConversions } = r;
-    const { lifetimeMedical = 0, lifetimeMedicalFromHsa = 0 } = r;
-    const growth = retRow.totals.endBalance - startTotal - contributed;
-    const yrs = r.retirementYear - r.baseYear;
 
     const parts = [
-      h('div', { class: 'stats' },
-        survivalTile(r),
-        statTile("At retirement · today's dollars", usd(retRow.real.endBalance), `${r.retirementYear} · in ${yrs} yr${yrs === 1 ? '' : 's'}`, COL.real),
-        statTile('Total contributed', usd(contributed), 'over the accumulation years'),
-        employerMatchTotal > 0 ? statTile('Employer match', usd(employerMatchTotal), 'free money, on top of what you contributed') : null,
-        // Under 'maxSustainable', ending balance is always ~$0 by construction (that's what the
-        // solver targets) — showing it as a headline number is misleading, not just uninteresting.
-        // The actually meaningful number for this strategy is the spend it solved for.
-        r.solvedSpending != null
-          ? statTile("Annual spend · today's $", usd(r.solvedSpending), 'maximum sustainable through ' + r.horizonYear, COL.real)
-          : statTile("End of plan · today's dollars", usd(endRow.real.endBalance), `${r.horizonYear}`, endRow.real.endBalance > 0 ? COL.real : COL.critical),
-        decumulationTax > 0 ? statTile('Lifetime tax in retirement', usd(decumulationTax), 'nominal, federal + state') : null,
-        decumulationTax > 0 ? statTile('Lifetime effective tax rate', `${(decumulationEffectiveTaxRate * 100).toFixed(1)}%`, 'total tax ÷ total gross income, in retirement') : null,
-        lifetimeTax > decumulationTax ? statTile('Total tax, working + retired', usd(lifetimeTax), `${(lifetimeEffectiveTaxRate * 100).toFixed(1)}% effective, your whole plan`) : null,
-        lifetimeConversions > 0 ? statTile('Converted to Roth', usd(lifetimeConversions), 'nominal, working + retired years') : null,
-        lifetimeMedical > 0
-          ? statTile('Lifetime medical costs', usd(lifetimeMedical),
-              lifetimeMedicalFromHsa > 0
-                ? `nominal · ${usd(lifetimeMedicalFromHsa)} of it paid tax-free from your HSA`
-                : 'nominal, in retirement')
-          : null,
-      ),
+      h('div', { class: 'stats' }, ...statTileDescriptors(r).map((d) => statTile(d.label, d.value, d.sub, d.accent))),
       buildChart(r),
       h('div', { class: 'table-toggle' },
         h('button', { class: 'ghost', onclick: () => { showTable = !showTable; render(); } }, showTable ? 'Hide table' : 'Show table'),
