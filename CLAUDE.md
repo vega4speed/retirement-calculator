@@ -363,6 +363,26 @@ ui/                   vanilla-JS UI (no framework, no deps)
                          xTickYears, the fixed non-categorical COL tokens) — factored out in
                          Phase 7 so projection-view.js's chart and scenarios.js's comparison
                          chart don't each keep their own copy.
+  pinned-bar.js          (2026-07-30) an optional thin bar, sticky to the top of the viewport,
+                         mirroring a user-chosen subset of projection-view.js's stat tiles (e.g.
+                         "Annual spend · today's $" under maxSustainable) so a change to an
+                         assumption is visible without scrolling to the chart every time — "see
+                         the impact immediately" is the whole point of a live calculator. Reuses
+                         projection-view.js's exported `statTileDescriptors(r)` (refactored out of
+                         its render() so both consumers stay byte-identical by construction, not
+                         convention) rather than re-deriving any of the stat math. Which figures
+                         are pinned is a display preference, not plan data — its own localStorage
+                         key (`retirement-calc:pinned-bar:v1`), same reasoning as scenarios.js's
+                         separate key, survives independent of Export/Import/Clear. Sticky-pin
+                         detection (for the shrink-on-stick styling) uses an IntersectionObserver
+                         on a zero-height sentinel placed directly before the bar — both must be
+                         appended as siblings of the page's own top-level content (app.js's root),
+                         NOT nested together in their own small wrapper div: a sticky element's
+                         containing block is its immediate parent, and a wrapper holding only
+                         these two ~40px-tall nodes would itself scroll out of view almost
+                         immediately, unsticking the "stuck" bar right along with it (a real bug
+                         hit and fixed while building this — verified via a Playwright scroll
+                         test, not just visual inspection).
   dom.js, formats.js    tiny DOM builder (incl. SVG) + value<->input formatting helpers
 data/                 tax-tables.json (verified 2025/2026 figures, now incl. HSA self-only/family
                        limits, IRA/Roth-IRA limits + catch-up, the 401(k) elective deferral limit

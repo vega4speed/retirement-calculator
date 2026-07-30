@@ -45,6 +45,22 @@
     .lvl-byAccountYear { background: #e9f9ee; font-weight: 600; }
     /* stacked settings in the Assumptions card */
     .card > .setting + .setting, .card > .setting:first-of-type { border-top: 1px solid var(--line); margin-top: .55rem; padding-top: .55rem; }
+    /* pinned bar — mirrors chosen stat tiles at the top of the page, shrinking once scrolled
+       past and stuck (position: sticky) so the always-visible strip stays unobtrusive */
+    .pinned-bar { position: sticky; top: 0; z-index: 20; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem; margin-bottom: 1rem; transition: padding .15s ease, box-shadow .15s ease; }
+    .pinned-row { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
+    .pinned-items { display: flex; flex: 1; gap: 1.25rem 1.75rem; flex-wrap: wrap; }
+    .pinned-item { display: flex; flex-direction: column; line-height: 1.2; }
+    .pinned-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); transition: font-size .15s ease; }
+    .pinned-value { font-size: 1.2rem; font-weight: 700; transition: font-size .15s ease; }
+    .pinned-empty { padding: .15rem 0; }
+    .pinned-gear { flex-shrink: 0; padding: .25rem .6rem; font-size: .8rem; }
+    .pinned-menu { display: flex; flex-wrap: wrap; gap: .3rem 1.25rem; margin-top: .55rem; padding-top: .55rem; border-top: 1px dashed var(--line); }
+    .pinned-menu-item { display: inline-flex; align-items: center; gap: .35rem; font-size: .85rem; white-space: nowrap; }
+    .pinned-bar.is-pinned { padding: .2rem .8rem; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+    .pinned-bar.is-pinned .pinned-item { flex-direction: row; align-items: baseline; gap: .35rem; }
+    .pinned-bar.is-pinned .pinned-label { font-size: .62rem; }
+    .pinned-bar.is-pinned .pinned-value { font-size: .92rem; }
     /* projection summary stat tiles */
     .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: .75rem; margin-bottom: 1rem; }
     @media (max-width: 46rem) { .stats { grid-template-columns: repeat(2, 1fr); } }

@@ -12,6 +12,7 @@ import { h, clear, download } from './dom.js';
 import { createAccountsEditor } from './accounts-editor.js';
 import { createSettingControl } from './setting-control.js';
 import { createProjectionView } from './projection-view.js';
+import { createPinnedBar } from './pinned-bar.js';
 import { resolve } from '../engine/resolver.js';
 import { resolveYearTable, bracketBreakdown, standardDeduction, ordinaryTax, marginalRateForIncome, traditionalVsRothVerdict, grossUpDeduction, requiredBeginningAge, rmdAmount } from '../engine/tax.js';
 import { estimatePIA, benefitAtClaimingAge, fullRetirementAge } from '../engine/socialsecurity.js';
@@ -281,6 +282,7 @@ export async function mount(root) {
     transitionsFor,
     getAccountTaxStatus: (id) => snapshot.accounts.find((a) => a.id === id)?.taxStatus,
   });
+  const pinnedBar = createPinnedBar();
 
   // Loads a saved scenario BACK into the live editor (overwriting it — the scenario itself stays
   // untouched, since it was saved as a deep copy). Mirrors loadPersisted()'s defaults-then-
@@ -361,6 +363,7 @@ export async function mount(root) {
   function refreshProjection() {
     const r = computeProjection();
     if (r) projectionView.render(r); else projectionView.clearView();
+    if (r) pinnedBar.render(r); else pinnedBar.clearView();
     updateMaxSustainableReadout(r);
     updateSocialSecurityReadout();
     updateTaxComparisonReadout(r);
@@ -888,6 +891,8 @@ export async function mount(root) {
     h('header', { class: 'app-header' },
       h('h1', {}, 'Retirement Calculator'),
       h('p', { class: 'muted' }, 'Project your accounts through retirement, in today’s dollars. Saved only in this browser.')),
+    pinnedBar.sentinel,
+    pinnedBar.el,
     body,
   );
   rebuild();
