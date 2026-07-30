@@ -251,7 +251,9 @@ function contributionSectionContent(breakdown, toDisplay) {
       h('th', {}, 'Account'), h('th', { class: 'r' }, 'Gross'), h('th', { class: 'r' }, 'Tax saved'),
       h('th', { class: 'r' }, 'FICA saved'), h('th', { class: 'r' }, 'Net cost'))),
     h('tbody', {}, ...breakdown.accounts.map((a) => h('tr', {},
-      h('td', {}, a.label),
+      h('td', {}, a.label, a.catchUpAmount > 0.5
+        ? h('div', { class: 'muted small' }, `includes ${usdFull(toDisplay(a.catchUpAmount))} age ${a.catchUpAge}+ catch-up`)
+        : null),
       h('td', { class: 'r' }, usdFull(toDisplay(a.gross))),
       h('td', { class: 'r' }, a.taxSaved > 0.5 ? usdFull(toDisplay(a.taxSaved)) : '—'),
       h('td', { class: 'r' }, a.ficaSaved > 0.5 ? usdFull(toDisplay(a.ficaSaved)) : '—'),

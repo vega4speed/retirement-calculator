@@ -138,13 +138,22 @@ export async function mount(root) {
   // cell (accumulation years). taxSaved/ficaSaved/netCost come straight from project.js (exact,
   // not estimated here) — this just labels and totals them per account.
   function contributionBreakdownFor(row) {
+    const hsaCatchUp = taxTables?.fixed?.hsaCatchUp;
+    const hsaCatchUpActive = hsaCatchUp && Number.isFinite(row.age) && row.age >= hsaCatchUp.age;
     const accounts = Object.entries(row.accounts)
       .filter(([, a]) => (a.contribution || 0) > 1e-9)
-      .map(([id, a]) => ({
-        id, label: snapshot.accounts.find((acc) => acc.id === id)?.label || id,
-        gross: a.contribution, taxSaved: a.taxSaved || 0, ficaSaved: a.ficaSaved || 0,
-        netCost: a.netCost ?? a.contribution,
-      }));
+      .map(([id, a]) => {
+        const acct = snapshot.accounts.find((x) => x.id === id);
+        return {
+          id, label: acct?.label || id,
+          gross: a.contribution, taxSaved: a.taxSaved || 0, ficaSaved: a.ficaSaved || 0,
+          netCost: a.netCost ?? a.contribution,
+          // The HSA 55+ catch-up ($1,000, fixed by statute) is already folded into `gross` by the
+          // engine (tax.hsaContributionLimit) — this just labels it so it isn't invisible.
+          catchUpAmount: (acct?.taxStatus === 'hsa' && hsaCatchUpActive) ? hsaCatchUp.amount : 0,
+          catchUpAge: hsaCatchUp?.age,
+        };
+      });
     return {
       accounts,
       totalGross: row.totals.contribution || 0,
