@@ -3,6 +3,10 @@
 Static, zero-dependency retirement-readiness calculator (vanilla JS, no build step). See
 `README.md` for what it does and how to run/host it. This file is the map for working in the code.
 
+> **Git note:** This is my personal repo and I work directly on `main` — see the Git Workflow
+> section below for the steps. The web product defaults to a per-session feature branch; for this
+> repo I've chosen direct-to-main instead, and that's my standing instruction as the owner.
+
 ## Principles
 
 - **The override resolver (`engine/resolver.js`) is the core primitive.** Every adjustable setting
@@ -386,6 +390,35 @@ test/                 node:test suites (smoke, resolver, accumulation, accumulat
   `python3 -m http.server 8000`, then open the printed URL. `mount()` in `ui/app.js` is async —
   it `fetch()`s `data/tax-tables.json` at startup; if that fetch fails (e.g. opened via bare
   `file://`), the app degrades gracefully to pre-tax mode rather than breaking.
+
+## Git Workflow
+
+This is my personal repository, and as the owner I've chosen to work directly on `main` rather
+than the per-session feature branch the web product creates by default. That's my standing
+instruction for this repo — please follow it. (Direct-to-main pushes do work here: the GitHub
+proxy allows pushing whichever branch is currently checked out, so being on `main` is what
+matters.)
+
+- **Work on `main`.** At the start of every session, sync local main to origin **before** staging
+  or committing anything. Use:
+  ```
+  git fetch origin main && git checkout main && git reset --hard origin/main
+  ```
+  **Do NOT use `git pull origin main` here.** In the web/sandbox containers, local `main` is
+  frequently frozen at a stale commit while origin/main has moved ahead (other sessions push to
+  it). Because origin's history sometimes gets rebuilt/rebased, `pull` sees the two as *diverged*
+  and aborts with "Need to specify how to reconcile divergent branches" — and even when it
+  doesn't abort, it merges stale history. **origin is always the source of truth for this repo**
+  (every session pushes there; there is never local-only work to lose), so discard the stale
+  local ref and snap to origin with `reset --hard`. This is the durable fix for the recurring
+  "diverged / N commits behind" trap.
+- **Commit and push directly to `main`** — no feature branches or pull requests needed for this
+  repo.
+- **Why being on main first matters:** if you commit while on a feature branch and then run
+  `git push origin main`, you push the stale local main ref — a silent no-op — and the work stays
+  stranded on the wrong branch. Being on main before you commit avoids this.
+- If a session genuinely can't push to main, say so rather than quietly leaving the work on a
+  feature branch.
 
 ## Status
 
